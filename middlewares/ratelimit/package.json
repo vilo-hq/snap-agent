@@ -1,0 +1,51 @@
+{
+  "name": "@snap-agent/middleware-ratelimit",
+  "version": "0.1.0",
+  "description": "Rate limiting middleware for SnapAgent SDK - Per-user rate limiting and abuse prevention.",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsup src/index.ts --format cjs,esm --dts --clean",
+    "dev": "tsup src/index.ts --format cjs,esm --dts --watch",
+    "test": "vitest",
+    "lint": "eslint src/",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "ai",
+    "agents",
+    "llm",
+    "middleware",
+    "rate-limit",
+    "throttle",
+    "abuse-prevention",
+    "typescript",
+    "plugin"
+  ],
+  "author": "ViloTech",
+  "license": "MIT",
+  "peerDependencies": {
+    "@snap-agent/core": "^0.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^1.0.0",
+    "eslint": "^8.0.0"
+  },
+  "files": [
+    "dist",
+    "LICENSE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vilo-hq/snap-agent",
+    "directory": "middlewares/ratelimit"
+  },
+  "bugs": {
+    "url": "https://github.com/vilo-hq/snap-agent/issues"
+  }
+}
+

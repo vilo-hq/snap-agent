@@ -1,0 +1,56 @@
+{
+  "name": "@snap-agent/rag-ecommerce",
+  "version": "0.1.0",
+  "description": "E-commerce RAG plugin for SnapAgent SDK - Product search with vector embeddings",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "require": "./dist/index.js",
+      "import": "./dist/index.mjs",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts --format cjs,esm --dts --clean",
+    "dev": "tsup src/index.ts --format cjs,esm --dts --watch",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "rag",
+    "ecommerce",
+    "vector-search",
+    "product-recommendations",
+    "ai"
+  ],
+  "author": "ViloTech",
+  "license": "MIT",
+  "peerDependencies": {
+    "@snap-agent/core": "^0.1.0",
+    "mongodb": "^6.0.0"
+  },
+  "dependencies": {
+    "openai": "^5.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.8.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vilo-hq/snap-agent",
+    "directory": "plugins/rag-ecommerce"
+  },
+  "bugs": {
+    "url": "https://github.com/vilo-hq/snap-agent/issues"
+  }
+}
+
+

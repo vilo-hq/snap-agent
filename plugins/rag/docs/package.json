@@ -1,0 +1,51 @@
+{
+  "name": "@snap-agent/rag-docs",
+  "version": "0.1.0",
+  "description": "Documentation RAG plugin for SnapAgent SDK - Semantic search over markdown, code, and technical documentation",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "require": "./dist/index.js",
+      "import": "./dist/index.mjs",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts --format cjs,esm --dts --clean",
+    "dev": "tsup src/index.ts --format cjs,esm --dts --watch",
+    "lint": "eslint src/"
+  },
+  "keywords": [
+    "snap-agent",
+    "rag",
+    "documentation",
+    "markdown",
+    "search",
+    "embeddings",
+    "ai",
+    "plugin"
+  ],
+  "author": "ViloTech",
+  "license": "MIT",
+  "peerDependencies": {
+    "@snap-agent/core": "^0.1.0"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vilotech/snap-agent",
+    "directory": "plugins/rag/docs"
+  }
+}
+

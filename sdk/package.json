@@ -1,0 +1,102 @@
+{
+  "name": "@snap-agent/core",
+  "version": "0.1.0",
+  "description": "SnapAgent - The lightweight, snap-in AI agent SDK. Multi-provider support (OpenAI, Anthropic, Google). Edge-runtime compatible.",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "edge-light": "./dist/index.mjs",
+      "worker": "./dist/index.mjs",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    },
+    "./edge": {
+      "edge-light": "./dist/index.mjs",
+      "worker": "./dist/index.mjs",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs"
+    },
+    "./storage": {
+      "types": "./dist/storage/index.d.ts",
+      "import": "./dist/storage/index.mjs",
+      "require": "./dist/storage/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts src/storage/index.ts --format cjs,esm --dts --clean",
+    "dev": "tsup src/index.ts src/storage/index.ts --format cjs,esm --dts --watch",
+    "test": "vitest run --exclude tests/integration/**",
+    "test:watch": "vitest --exclude tests/integration/**",
+    "test:integration": "vitest run tests/integration/",
+    "test:all": "vitest run",
+    "lint": "eslint src/",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "ai",
+    "agents",
+    "llm",
+    "openai",
+    "anthropic",
+    "gemini",
+    "claude",
+    "gpt",
+    "chatgpt",
+    "multi-provider",
+    "typescript",
+    "conversational-ai",
+    "chatbot",
+    "assistant",
+    "edge",
+    "cloudflare-workers",
+    "vercel-edge",
+    "serverless"
+  ],
+  "author": "ViloTech",
+  "license": "MIT",
+  "peerDependencies": {
+    "@ai-sdk/openai": "^2.0.0",
+    "ai": "^5.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@ai-sdk/anthropic": {
+      "optional": true
+    },
+    "@ai-sdk/google": {
+      "optional": true
+    },
+    "mongodb": {
+      "optional": true
+    },
+    "@upstash/redis": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "dotenv": "^17.2.3",
+    "eslint": "^8.0.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.8.0",
+    "vitest": "^1.0.0"
+  },
+  "dependencies": {
+    "zod": "^3.22.4"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vilo-hq/snap-agent"
+  },
+  "bugs": {
+    "url": "https://github.com/vilo-hq/snap-agent/issues"
+  },
+  "homepage": "https://vilotech.co"
+}

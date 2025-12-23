@@ -1,0 +1,41 @@
+{
+  "name": "@snap-agent/analytics-console",
+  "version": "0.1.0",
+  "description": "Console analytics plugin for SnapAgent SDK - Pretty-print metrics to terminal for debugging",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "require": "./dist/index.js",
+      "import": "./dist/index.mjs",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts --format cjs,esm --dts --clean",
+    "dev": "tsup src/index.ts --format cjs,esm --dts --watch"
+  },
+  "keywords": [
+    "snap-agent",
+    "analytics",
+    "console",
+    "debugging",
+    "logging"
+  ],
+  "author": "ViloTech",
+  "license": "MIT",
+  "peerDependencies": {
+    "@snap-agent/core": "^0.1.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vilotech/snap-agent",
+    "directory": "plugins/analytics/console"
+  }
+}
+
