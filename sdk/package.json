@@ -1,6 +1,6 @@
 {
   "name": "@snap-agent/core",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "SnapAgent - The lightweight, snap-in AI agent SDK. Multi-provider support (OpenAI, Anthropic, Google). Edge-runtime compatible.",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
@@ -63,8 +63,8 @@
   "author": "ViloTech",
   "license": "MIT",
   "peerDependencies": {
-    "@ai-sdk/openai": "^2.0.0",
-    "ai": "^5.0.0",
+    "@ai-sdk/openai": "^2.0.0 || ^3.0.0",
+    "ai": "^5.0.0 || ^6.0.0",
     "mongodb": "^6.0.0 || ^7.0.0"
   },
   "peerDependenciesMeta": {
@@ -82,8 +82,8 @@
     }
   },
   "devDependencies": {
-    "@ai-sdk/anthropic": "^2.0.0",
-    "@ai-sdk/google": "^2.0.0",
+    "@ai-sdk/anthropic": "^2.0.0 || ^3.0.0",
+    "@ai-sdk/google": "^2.0.0 || ^3.0.0",
     "@types/node": "^24.0.0",
     "dotenv": "^17.2.3",
     "eslint": "^8.0.0",
