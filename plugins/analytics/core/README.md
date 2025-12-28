@@ -58,7 +58,7 @@ const agent = await client.createAgent({
 });
 
 // Use the agent normally...
-// Analytics are collected automatically!
+// Analytics are collected automatically
 
 // Get metrics
 const metrics = await analytics.getMetrics({

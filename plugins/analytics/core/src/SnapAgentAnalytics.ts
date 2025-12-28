@@ -8,6 +8,14 @@ import type {
   TokenMetrics,
 } from '@snap-agent/core';
 
+import type {
+  AnalyticsStorage,
+  StoredRequest,
+  StoredResponse,
+  StoredError,
+} from './storage';
+import { MemoryAnalyticsStorage } from './storage';
+
 // ============================================================================
 // Configuration
 // ============================================================================
@@ -71,6 +79,20 @@ export interface AnalyticsConfig {
    * Custom event handler for real-time metrics
    */
   onMetric?: (metric: MetricEvent) => void;
+
+  /**
+   * Analytics storage adapter for persistent storage.
+   * If not provided, uses in-memory storage (data lost on restart).
+   * 
+   * @example
+   * // Use MongoDB storage
+   * import { MongoAnalyticsStorage } from '@snap-agent/analytics/storage';
+   * 
+   * const analytics = new SnapAgentAnalytics({
+   *   storage: new MongoAnalyticsStorage({ uri: process.env.MONGODB_URI! }),
+   * });
+   */
+  storage?: AnalyticsStorage;
 }
 
 // ============================================================================
@@ -81,6 +103,16 @@ export interface MetricEvent {
   type: 'request' | 'response' | 'error';
   timestamp: Date;
   data: RequestTrackingData | ResponseTrackingData | ErrorTrackingData;
+}
+
+/**
+ * Data passed to onFlush callback
+ */
+export interface FlushData {
+  requests: StoredRequest[];
+  responses: StoredResponse[];
+  errors: StoredError[];
+  timestamp: Date;
 }
 
 /**
@@ -253,53 +285,7 @@ export interface PercentileMetrics {
 // Internal Storage Types
 // ============================================================================
 
-interface StoredRequest {
-  id: string;
-  agentId: string;
-  threadId?: string;
-  userId?: string;
-  timestamp: Date;
-  messageLength: number;
-  model?: string;
-  provider?: string;
-}
-
-interface StoredResponse {
-  id: string;
-  requestId: string;
-  agentId: string;
-  threadId?: string;
-  userId?: string;
-  timestamp: Date;
-  responseLength: number;
-
-  // Performance
-  timings: PerformanceTimings;
-
-  // Tokens
-  tokens: TokenMetrics;
-
-  // RAG
-  rag?: RAGMetrics;
-
-  // Status
-  success: boolean;
-  errorType?: string;
-
-  // Model
-  model?: string;
-  provider?: string;
-}
-
-interface StoredError {
-  id: string;
-  agentId: string;
-  threadId?: string;
-  timestamp: Date;
-  errorType: string;
-  errorMessage: string;
-  component?: string;
-}
+// StoredRequest, StoredResponse, StoredError are imported from ./storage
 
 interface ThreadStats {
   threadId: string;
@@ -352,9 +338,12 @@ export class SnapAgentAnalytics implements AnalyticsPlugin {
   name = 'snap-agent-analytics';
   type = 'analytics' as const;
 
-  private config: Required<AnalyticsConfig>;
+  private config: Required<Omit<AnalyticsConfig, 'storage'>> & Pick<AnalyticsConfig, 'storage'>;
 
-  // Storage
+  // Persistent storage adapter
+  private storage: AnalyticsStorage;
+
+  // In-memory caches (for fast access during aggregation)
   private requests: StoredRequest[] = [];
   private responses: StoredResponse[] = [];
   private errors: StoredError[] = [];
@@ -364,8 +353,12 @@ export class SnapAgentAnalytics implements AnalyticsPlugin {
   // Counter for IDs
   private idCounter = 0;
 
-  // Flush timer
+  // Flush mechanism
   private flushTimer?: NodeJS.Timeout;
+  private pendingRequests: StoredRequest[] = [];
+  private pendingResponses: StoredResponse[] = [];
+  private pendingErrors: StoredError[] = [];
+  private isFlushing = false;
 
   constructor(config: AnalyticsConfig = {}) {
     this.config = {
@@ -379,11 +372,20 @@ export class SnapAgentAnalytics implements AnalyticsPlugin {
       retentionDays: config.retentionDays ?? 30,
       flushInterval: config.flushInterval ?? 5000,
       onMetric: config.onMetric || (() => { }),
+      storage: config.storage,
     };
+
+    // Initialize storage adapter (default to in-memory)
+    this.storage = config.storage || new MemoryAnalyticsStorage();
 
     // Start cleanup timer if retention is set
     if (this.config.retentionDays > 0) {
-      setInterval(() => this.cleanup(), 60 * 60 * 1000); // Every hour
+      setInterval(() => this.cleanup(), 60 * 60 * 1000);
+    }
+
+    // Start flush timer for persistent storage or legacy onFlush callback
+    if ((this.config.storage) && this.config.flushInterval > 0) {
+      this.startFlushTimer();
     }
   }
 
@@ -456,6 +458,7 @@ export class SnapAgentAnalytics implements AnalyticsPlugin {
     };
 
     this.requests.push(request);
+    this.pendingRequests.push(request);
 
     // Update conversation stats
     if (this.config.enableConversation && data.threadId) {
@@ -511,6 +514,7 @@ export class SnapAgentAnalytics implements AnalyticsPlugin {
     };
 
     this.responses.push(response);
+    this.pendingResponses.push(response);
 
     // Update conversation stats
     if (this.config.enableConversation && data.threadId) {
@@ -554,6 +558,7 @@ export class SnapAgentAnalytics implements AnalyticsPlugin {
     };
 
     this.errors.push(error);
+    this.pendingErrors.push(error);
 
     // Emit event
     this.config.onMetric({
@@ -1093,11 +1098,12 @@ export class SnapAgentAnalytics implements AnalyticsPlugin {
     return sorted[Math.max(0, index)];
   }
 
-  private cleanup(): void {
+  private async cleanup(): Promise<void> {
     if (this.config.retentionDays <= 0) return;
 
     const cutoff = new Date(Date.now() - this.config.retentionDays * 24 * 60 * 60 * 1000);
 
+    // Clean up in-memory cache
     this.requests = this.requests.filter((r) => r.timestamp > cutoff);
     this.responses = this.responses.filter((r) => r.timestamp > cutoff);
     this.errors = this.errors.filter((e) => e.timestamp > cutoff);
@@ -1107,6 +1113,11 @@ export class SnapAgentAnalytics implements AnalyticsPlugin {
       if (stats.lastMessage < cutoff) {
         this.threadStats.delete(threadId);
       }
+    }
+
+    // Clean up persistent storage
+    if (this.config.storage) {
+      await this.storage.deleteOlderThan(cutoff);
     }
   }
 
@@ -1206,6 +1217,9 @@ export class SnapAgentAnalytics implements AnalyticsPlugin {
     this.requests = [];
     this.responses = [];
     this.errors = [];
+    this.pendingRequests = [];
+    this.pendingResponses = [];
+    this.pendingErrors = [];
     this.threadStats.clear();
     this.userSessions.clear();
   }
@@ -1224,6 +1238,104 @@ export class SnapAgentAnalytics implements AnalyticsPlugin {
         oldest: this.requests[0]?.timestamp,
         newest: this.requests[this.requests.length - 1]?.timestamp,
       },
+    };
+  }
+
+  // ============================================================================
+  // Flush Mechanism
+  // ============================================================================
+
+  /**
+   * Start the flush timer
+   */
+  private startFlushTimer(): void {
+    if (this.flushTimer) {
+      return; // Already running
+    }
+    this.flushTimer = setInterval(() => {
+      this.flush().catch((err) => {
+        console.error('[SnapAgentAnalytics] Flush error:', err);
+      });
+    }, this.config.flushInterval);
+  }
+
+  /**
+   * Stop the flush timer
+   */
+  private stopFlushTimer(): void {
+    if (this.flushTimer) {
+      clearInterval(this.flushTimer);
+      this.flushTimer = undefined;
+    }
+  }
+
+  /**
+   * Flush pending data to external storage via onFlush callback
+   * @returns Promise that resolves when flush is complete
+   */
+  async flush(): Promise<void> {
+    if (this.isFlushing) {
+      return; // Already flushing
+    }
+
+    // Nothing to flush
+    if (
+      this.pendingRequests.length === 0 &&
+      this.pendingResponses.length === 0 &&
+      this.pendingErrors.length === 0
+    ) {
+      return;
+    }
+
+    this.isFlushing = true;
+
+    try {
+      // Capture pending data
+      const flushData: FlushData = {
+        requests: [...this.pendingRequests],
+        responses: [...this.pendingResponses],
+        errors: [...this.pendingErrors],
+        timestamp: new Date(),
+      };
+
+      // Clear pending arrays before calling callback
+      // (so new data during callback goes to next batch)
+      this.pendingRequests = [];
+      this.pendingResponses = [];
+      this.pendingErrors = [];
+
+      // Save to storage adapter
+      if (this.config.storage) {
+        await Promise.all([
+          this.storage.saveRequests(flushData.requests),
+          this.storage.saveResponses(flushData.responses),
+          this.storage.saveErrors(flushData.errors),
+        ]);
+      }
+
+    } finally {
+      this.isFlushing = false;
+    }
+  }
+
+  /**
+   * Stop the analytics plugin and flush remaining data
+   * Call this before shutting down to ensure all data is persisted
+   */
+  async stop(): Promise<void> {
+    this.stopFlushTimer();
+    await this.flush();
+    await this.storage.close();
+  }
+
+  /**
+   * Get count of pending (unflushed) items
+   */
+  getPendingCount(): { requests: number; responses: number; errors: number } {
+    return {
+      requests: this.pendingRequests.length,
+      responses: this.pendingResponses.length,
+      errors: this.pendingErrors.length,
     };
   }
 }
