@@ -7,9 +7,9 @@
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "require": "./dist/index.js",
+      "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs",
-      "types": "./dist/index.d.ts"
+      "require": "./dist/index.js"
     }
   },
   "files": [
@@ -48,7 +48,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/vilo-hq/snap-agent",
+    "url": "git+https://github.com/vilo-hq/snap-agent.git",
     "directory": "plugins/rag/ecommerce"
   },
   "homepage": "https://github.com/vilo-hq/snap-agent/tree/main/plugins/rag/ecommerce",
@@ -56,5 +56,3 @@
     "url": "https://github.com/vilo-hq/snap-agent/issues"
   }
 }
-
-
