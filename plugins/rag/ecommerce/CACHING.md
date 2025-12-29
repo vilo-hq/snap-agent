@@ -1,6 +1,6 @@
 # RAG Plugin Caching
 
-The EcommerceRAGPlugin includes built-in intelligent caching to reduce API calls, costs, and latency.
+The EcommerceRAGPlugin by ViloTech includes built-in intelligent caching to reduce API calls, costs, and latency.
 
 ## What Gets Cached
 
@@ -28,7 +28,7 @@ const plugin = new EcommerceRAGPlugin({
   openaiApiKey: process.env.OPENAI_API_KEY!,
   voyageApiKey: process.env.VOYAGE_API_KEY!,
   tenantId: 'my-store',
-  // Caching is enabled by default!
+  // Caching is enabled by default
 });
 ```
 
@@ -246,10 +246,10 @@ setInterval(() => {
 ## Summary
 
 - **Enabled by default** - No configuration needed
-- **Significant savings** - 50-80% reduction in latency and costs
+- **Significant savings** - 50-80% reduction in latency and costs (estimated)
 - **Zero breaking changes** - Works with existing code
-- **Configurable** - Tune for your use case
-- **Observable** - Track performance with stats  
+- **Configurable** - Flexible to support multiple use cases
+- **Observable** - Track performance with stats
 
-The caching layer is a **free performance upgrade** for your RAG plugin!
+This caching layer is a **free performance upgrade** for your RAG plugin
 

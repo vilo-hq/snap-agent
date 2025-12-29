@@ -7,9 +7,8 @@
  * 3. Cache hit rate improvements over time
  */
 
-import { createClient } from '../../sdk/src';
-import { MongoDBStorage } from '../../sdk/src/storage';
-import { EcommerceRAGPlugin } from './src';
+import { createClient, MongoDBStorage } from '@snap-agent/core';
+import { EcommerceRAGPlugin } from '@snap-agent/rag-ecommerce';
 
 async function main() {
   console.log('RAG Plugin Caching Example\n');
@@ -21,7 +20,7 @@ async function main() {
     voyageApiKey: process.env.VOYAGE_API_KEY!,
     tenantId: 'demo-store',
     language: 'en',
-    
+
     // Optional: Customize cache settings
     cache: {
       embeddings: {
@@ -77,17 +76,17 @@ async function main() {
     const isRepeat = queries.slice(0, i).includes(query);
 
     console.log(`\n${i + 1}. Query: "${query}" ${isRepeat ? '(repeat)' : '(new)'}`);
-    
+
     const start = Date.now();
-    
+
     const response = await client.chat({
       threadId: thread.id,
       message: query,
       useRAG: true,
     });
-    
+
     const duration = Date.now() - start;
-    
+
     console.log(`   Response time: ${duration}ms`);
     console.log(`   Reply: ${response.reply.substring(0, 100)}...`);
 
@@ -101,13 +100,13 @@ async function main() {
   console.log('\n\nFinal Cache Statistics:');
   console.log('─'.repeat(60));
   const finalStats = plugin.getCacheStats();
-  
+
   console.log('\nEmbeddings Cache:');
   console.log(`   Size: ${finalStats.embeddings.size}/${finalStats.embeddings.maxSize} entries`);
   console.log(`   Hits: ${finalStats.embeddings.hits}`);
   console.log(`   Misses: ${finalStats.embeddings.misses}`);
   console.log(`   Hit Rate: ${(parseFloat(finalStats.embeddings.hitRate) * 100).toFixed(1)}%`);
-  
+
   console.log('\nAttributes Cache:');
   console.log(`   Size: ${finalStats.attributes.size}/${finalStats.attributes.maxSize} entries`);
   console.log(`   Hits: ${finalStats.attributes.hits}`);
@@ -122,7 +121,7 @@ async function main() {
 
   // Cleanup
   await plugin.disconnect();
-  
+
   console.log('\nExample complete!');
 }
 

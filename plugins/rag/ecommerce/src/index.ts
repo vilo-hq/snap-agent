@@ -13,6 +13,8 @@ export type {
   EcommerceRAGConfig,
   ProductDoc,
   QueryAttrs,
+  URLSource,
+  URLIngestResult,
 } from './EcommerceRAGPlugin';
 
 

@@ -34,7 +34,7 @@ export interface RAGContext {
 export interface RAGDocument {
   id: string;
   content: string;
-  metadata?: Record<string, any>;
+  metadata?: Record<string, any>; // Here we can store key-value pairs for documents that have properties like price, color, size, etc.
 }
 
 /**

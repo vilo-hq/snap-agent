@@ -1,18 +1,51 @@
 // Note: In production, this will import from the published package
 // For development, TypeScript may show an error - this is expected
-import type { 
-  RAGPlugin, 
-  RAGContext, 
-  RAGDocument, 
-  IngestResult, 
+import type {
+  RAGPlugin,
+  RAGContext,
+  RAGDocument,
+  IngestResult,
   IngestOptions,
   BulkOperation,
   BulkResult,
-  URLSource,
-  URLIngestResult
 } from '@snap-agent/core';
 import { MongoClient, Db, Collection } from 'mongodb';
 import OpenAI from 'openai';
+
+// ============================================================================
+// URL Ingestion Types (local definitions)
+// ============================================================================
+
+export interface URLSource {
+  url: string;
+  type: 'json' | 'csv' | 'xml' | 'api';
+  auth?: {
+    type: 'bearer' | 'basic' | 'api-key' | 'custom';
+    token?: string;
+    username?: string;
+    password?: string;
+    header?: string;
+    key?: string;
+    headers?: Record<string, string>;
+  };
+  transform?: {
+    documentPath?: string;
+    fieldMapping?: {
+      id?: string;
+      content?: string;
+      [key: string]: string | undefined;
+    };
+  };
+  headers?: Record<string, string>;
+  timeout?: number;
+  metadata?: Record<string, any>;
+}
+
+export interface URLIngestResult extends IngestResult {
+  sourceUrl: string;
+  fetchedAt: Date;
+  documentsFetched: number;
+}
 
 // ============================================================================
 // Types
@@ -156,6 +189,9 @@ export class EcommerceRAGPlugin implements RAGPlugin {
     attributes: { hits: 0, misses: 0 },
   };
 
+  // Cleanup interval reference
+  private cleanupInterval?: ReturnType<typeof setInterval>;
+
   constructor(config: EcommerceRAGConfig) {
     // Set defaults
     this.config = {
@@ -297,7 +333,7 @@ export class EcommerceRAGPlugin implements RAGPlugin {
   }
 
   // ============================================================================
-  // Private Methods - Your existing logic
+  // Private Methods
   // ============================================================================
 
   /**
@@ -340,7 +376,7 @@ export class EcommerceRAGPlugin implements RAGPlugin {
       throw new Error(`Voyage API error: ${response.statusText}`);
     }
 
-    const data = await response.json();
+    const data = await response.json() as { data: Array<{ embedding: number[] }> };
     const embedding = data.data[0].embedding;
 
     // Store in cache if enabled
@@ -613,8 +649,8 @@ export class EcommerceRAGPlugin implements RAGPlugin {
         throw new Error(`Voyage rerank error: ${response.statusText}`);
       }
 
-      const data = await response.json();
-      const scores = data.data.map((item: any) => item.relevance_score);
+      const data = await response.json() as { data: Array<{ relevance_score: number }> };
+      const scores = data.data.map((item) => item.relevance_score);
 
       const reranked = products.map((doc, idx) => ({
         ...doc,
@@ -680,7 +716,7 @@ export class EcommerceRAGPlugin implements RAGPlugin {
    */
   private startCacheCleanup(): void {
     // Run cleanup every 5 minutes
-    setInterval(() => {
+    this.cleanupInterval = setInterval(() => {
       this.cleanupExpiredCache();
     }, 300000);
   }
@@ -759,6 +795,21 @@ export class EcommerceRAGPlugin implements RAGPlugin {
   }
 
   /**
+   * Get MongoDB collection
+   */
+  private async getCollection(): Promise<Collection<ProductDoc>> {
+    const db = await this.ensureConnection();
+    return db.collection(this.config.collection);
+  }
+
+  /**
+   * Generate embedding for a single text
+   */
+  private async generateEmbedding(text: string): Promise<number[]> {
+    return this.embedText(text);
+  }
+
+  /**
    * Ingest products into the RAG system
    * Converts RAGDocuments to ProductDocs and indexes them with embeddings
    */
@@ -767,7 +818,7 @@ export class EcommerceRAGPlugin implements RAGPlugin {
     options?: IngestOptions
   ): Promise<IngestResult> {
     const collection = await this.getCollection();
-    
+
     let indexed = 0;
     let failed = 0;
     const errors: Array<{ id: string; error: string }> = [];
@@ -775,19 +826,38 @@ export class EcommerceRAGPlugin implements RAGPlugin {
     try {
       // Process documents in batches for efficiency
       const batchSize = options?.batchSize || 10;
-      
+
       for (let i = 0; i < documents.length; i += batchSize) {
         const batch = documents.slice(i, i + batchSize);
-        
-        // Generate embeddings for batch
-        const embeddings = await this.generateEmbeddingsBatch(
-          batch.map(doc => doc.content)
-        );
-        
+
+        // Generate embeddings for batch (include key attributes for better retrieval)
+        const textsForEmbedding = batch.map(doc => {
+          const metadata = doc.metadata || {};
+          const attributeParts: string[] = [];
+
+          // Include key product attributes in embedding
+          const attributeFields = ['category', 'brand', 'color', 'material', 'size', 'gender', 'season'];
+          for (const field of attributeFields) {
+            if (metadata[field]) {
+              const value = Array.isArray(metadata[field])
+                ? metadata[field].join(', ')
+                : metadata[field];
+              attributeParts.push(`${field}: ${value}`);
+            }
+          }
+
+          // Combine content with attributes
+          return attributeParts.length > 0
+            ? `${doc.content}. ${attributeParts.join(', ')}`
+            : doc.content;
+        });
+
+        const embeddings = await this.generateEmbeddingsBatch(textsForEmbedding);
+
         // Convert RAGDocuments to ProductDocs
         const productDocs = batch.map((doc, idx) => {
           const metadata = doc.metadata || {};
-          
+
           return {
             tenantId: this.config.tenantId,
             agentId: options?.agentId,
@@ -817,8 +887,8 @@ export class EcommerceRAGPlugin implements RAGPlugin {
             // Replace existing documents
             const bulkOps = productDocs.map(doc => ({
               replaceOne: {
-                filter: { 
-                  tenantId: this.config.tenantId, 
+                filter: {
+                  tenantId: this.config.tenantId,
                   sku: doc.sku,
                   ...(options.agentId ? { agentId: options.agentId } : {})
                 },
@@ -826,7 +896,7 @@ export class EcommerceRAGPlugin implements RAGPlugin {
                 upsert: true,
               },
             }));
-            
+
             const result = await collection.bulkWrite(bulkOps);
             indexed += result.upsertedCount + result.modifiedCount;
           } else if (options?.skipExisting) {
@@ -839,30 +909,30 @@ export class EcommerceRAGPlugin implements RAGPlugin {
               })
               .project({ sku: 1 })
               .toArray();
-            
+
             const existingSet = new Set(existingSkus.map(d => d.sku));
             const newDocs = productDocs.filter(d => !existingSet.has(d.sku));
-            
+
             if (newDocs.length > 0) {
               const result = await collection.insertMany(newDocs);
               indexed += result.insertedCount;
             }
-            
+
             failed += productDocs.length - newDocs.length;
           } else {
             // Default: upsert all
             const bulkOps = productDocs.map(doc => ({
               updateOne: {
-                filter: { 
-                  tenantId: this.config.tenantId, 
+                filter: {
+                  tenantId: this.config.tenantId,
                   sku: doc.sku,
-                  ...(options.agentId ? { agentId: options.agentId } : {})
+                  ...(options?.agentId ? { agentId: options.agentId } : {})
                 },
                 update: { $set: doc },
                 upsert: true,
               },
             }));
-            
+
             const result = await collection.bulkWrite(bulkOps);
             indexed += result.upsertedCount + result.modifiedCount;
           }
@@ -909,42 +979,58 @@ export class EcommerceRAGPlugin implements RAGPlugin {
     options?: IngestOptions
   ): Promise<void> {
     const collection = await this.getCollection();
-    
+
     const update: any = {};
-    
+    const metadata = document.metadata || {};
+
     if (document.content) {
-      // Generate new embedding if content changed
-      const embedding = await this.generateEmbedding(document.content);
+      // Build text for embedding including attributes
+      const attributeParts: string[] = [];
+      const attributeFields = ['category', 'brand', 'color', 'material', 'size', 'gender', 'season'];
+      for (const field of attributeFields) {
+        if (metadata[field]) {
+          const value = Array.isArray(metadata[field])
+            ? metadata[field].join(', ')
+            : metadata[field];
+          attributeParts.push(`${field}: ${value}`);
+        }
+      }
+
+      const textForEmbedding = attributeParts.length > 0
+        ? `${document.content}. ${attributeParts.join(', ')}`
+        : document.content;
+
+      // Generate new embedding with content + attributes
+      const embedding = await this.generateEmbedding(textForEmbedding);
       update.embedding = embedding;
       update.description = document.content;
     }
-    
+
     if (document.metadata) {
       // Update attributes from metadata
-      const metadata = document.metadata;
-      
+
       if (metadata.title) update.title = metadata.title;
       if (metadata.inStock !== undefined) update.inStock = metadata.inStock;
-      
+
       // Update nested attributes
       const attributeUpdates: any = {};
       const metricUpdates: any = {};
-      
+
       const attributeFields = ['category', 'brand', 'color', 'material', 'size', 'gender', 'season', 'price'];
       attributeFields.forEach(field => {
         if (metadata[field] !== undefined) {
           attributeUpdates[`attributes.${field}`] = metadata[field];
         }
       });
-      
+
       if (metadata.metrics) {
         Object.entries(metadata.metrics).forEach(([key, value]) => {
           metricUpdates[`metrics.${key}`] = value;
         });
       }
-      
+
       Object.assign(update, attributeUpdates, metricUpdates);
-      
+
       // Handle custom attributes
       if (metadata.attributes) {
         Object.entries(metadata.attributes).forEach(([key, value]) => {
@@ -952,7 +1038,7 @@ export class EcommerceRAGPlugin implements RAGPlugin {
         });
       }
     }
-    
+
     await collection.updateOne(
       {
         tenantId: this.config.tenantId,
@@ -971,15 +1057,15 @@ export class EcommerceRAGPlugin implements RAGPlugin {
     options?: IngestOptions
   ): Promise<number> {
     const collection = await this.getCollection();
-    
+
     const skuArray = Array.isArray(ids) ? ids : [ids];
-    
+
     const result = await collection.deleteMany({
       tenantId: this.config.tenantId,
       sku: { $in: skuArray },
       ...(options?.agentId ? { agentId: options.agentId } : {})
     });
-    
+
     return result.deletedCount;
   }
 
@@ -1005,14 +1091,14 @@ export class EcommerceRAGPlugin implements RAGPlugin {
               inserted++;
             }
             break;
-            
+
           case 'update':
             if (op.document) {
               await this.update(op.id, op.document, options);
               updated++;
             }
             break;
-            
+
           case 'delete':
             const count = await this.delete(op.id, options);
             deleted += count;
@@ -1043,30 +1129,34 @@ export class EcommerceRAGPlugin implements RAGPlugin {
    */
   private async generateEmbeddingsBatch(texts: string[]): Promise<number[][]> {
     const embeddings: number[][] = [];
-    
+    const cacheConfig = this.config.cache?.embeddings;
+
     for (const text of texts) {
       // Check cache first
-      const cached = this.embeddingCache.get(text);
-      if (cached && Date.now() - cached.timestamp < this.config.cache.embeddings.ttl) {
-        embeddings.push(cached.value);
-        this.cacheStats.embeddings.hits++;
-        continue;
+      if (cacheConfig?.enabled) {
+        const cached = this.embeddingCache.get(text);
+        const ttl = cacheConfig.ttl ?? 3600000;
+        if (cached && Date.now() - cached.timestamp < ttl) {
+          embeddings.push(cached.value);
+          this.cacheStats.embeddings.hits++;
+          continue;
+        }
       }
-      
+
       // Generate embedding
       this.cacheStats.embeddings.misses++;
       const embedding = await this.generateEmbedding(text);
       embeddings.push(embedding);
-      
+
       // Cache result
-      if (this.config.cache.embeddings.enabled) {
+      if (cacheConfig?.enabled) {
         this.embeddingCache.set(text, {
           value: embedding,
           timestamp: Date.now(),
         });
       }
     }
-    
+
     return embeddings;
   }
 
@@ -1077,28 +1167,37 @@ export class EcommerceRAGPlugin implements RAGPlugin {
     source: URLSource,
     options?: IngestOptions
   ): Promise<URLIngestResult> {
-    const startTime = Date.now();
-    
     try {
-      // Fetch data from URL
-      const axios = await import('axios');
-      const response = await axios.default.get(source.url, {
+      // Fetch data from URL using native fetch
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), source.timeout || 30000);
+
+      const response = await fetch(source.url, {
         headers: {
           ...source.headers,
           ...(source.auth && this.buildAuthHeaders(source.auth)),
         },
-        timeout: source.timeout || 30000,
+        signal: controller.signal,
       });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        throw new Error(`HTTP error: ${response.status} ${response.statusText}`);
+      }
 
       // Transform data to RAGDocuments
       let documents: RAGDocument[];
-      
+
       if (source.type === 'json' || source.type === 'api') {
-        documents = this.transformJsonToDocuments(response.data, source.transform);
+        const data = await response.json();
+        documents = this.transformJsonToDocuments(data, source.transform);
       } else if (source.type === 'csv') {
-        documents = await this.transformCsvToDocuments(response.data, source.transform);
+        const data = await response.text();
+        documents = await this.transformCsvToDocuments(data, source.transform);
       } else if (source.type === 'xml') {
-        documents = await this.transformXmlToDocuments(response.data, source.transform);
+        const data = await response.text();
+        documents = await this.transformXmlToDocuments(data, source.transform);
       } else {
         throw new Error(`Unsupported source type: ${source.type}`);
       }
@@ -1151,7 +1250,7 @@ export class EcommerceRAGPlugin implements RAGPlugin {
     try {
       // Parse webhook payload based on source
       let documents: RAGDocument[] = [];
-      
+
       if (source === 'shopify') {
         documents = this.parseShopifyWebhook(payload);
       } else if (source === 'woocommerce') {
@@ -1195,18 +1294,18 @@ export class EcommerceRAGPlugin implements RAGPlugin {
 
   private buildAuthHeaders(auth: URLSource['auth']): Record<string, string> {
     if (!auth) return {};
-    
-    if (auth.type === 'bearer') {
+
+    if (auth.type === 'bearer' && auth.token) {
       return { Authorization: `Bearer ${auth.token}` };
-    } else if (auth.type === 'basic') {
+    } else if (auth.type === 'basic' && auth.username && auth.password) {
       const encoded = Buffer.from(`${auth.username}:${auth.password}`).toString('base64');
       return { Authorization: `Basic ${encoded}` };
-    } else if (auth.type === 'api-key') {
+    } else if (auth.type === 'api-key' && auth.header && auth.key) {
       return { [auth.header]: auth.key };
-    } else if (auth.type === 'custom') {
+    } else if (auth.type === 'custom' && auth.headers) {
       return auth.headers;
     }
-    
+
     return {};
   }
 
@@ -1229,19 +1328,20 @@ export class EcommerceRAGPlugin implements RAGPlugin {
     // Map fields
     return items.map((item: any, index: number) => {
       const fieldMapping = transform?.fieldMapping || {};
-      
+
+      // Build metadata from fieldMapping only (not entire raw item)
+      const metadata: Record<string, any> = {};
+
+      for (const [key, path] of Object.entries(fieldMapping)) {
+        if (key !== 'id' && key !== 'content' && path && typeof path === 'string') {
+          metadata[key] = this.extractField(item, path);
+        }
+      }
+
       return {
-        id: this.extractField(item, fieldMapping.id || 'id') || `doc-${index}`,
-        content: this.extractField(item, fieldMapping.content || 'content') || JSON.stringify(item),
-        metadata: {
-          ...item,
-          ...(Object.keys(fieldMapping).reduce((acc, key) => {
-            if (key !== 'id' && key !== 'content' && fieldMapping[key]) {
-              acc[key] = this.extractField(item, fieldMapping[key]!);
-            }
-            return acc;
-          }, {} as Record<string, any>)),
-        },
+        id: this.extractField(item, fieldMapping.id as string || 'id') || `doc-${index}`,
+        content: this.extractField(item, fieldMapping.content as string || 'content') || JSON.stringify(item),
+        metadata,
       };
     });
   }
@@ -1253,7 +1353,7 @@ export class EcommerceRAGPlugin implements RAGPlugin {
     // Simple CSV parsing (can be enhanced with csv-parse library)
     const lines = csvData.trim().split('\n');
     const headers = lines[0].split(',').map(h => h.trim());
-    
+
     return lines.slice(1).map((line, index) => {
       const values = line.split(',').map(v => v.trim());
       const item = headers.reduce((acc, header, i) => {
@@ -1262,18 +1362,27 @@ export class EcommerceRAGPlugin implements RAGPlugin {
       }, {} as Record<string, string>);
 
       const fieldMapping = transform?.fieldMapping || {};
-      
+
+      // Build metadata from fieldMapping (consistent with JSON transform)
+      const metadata: Record<string, any> = {};
+
+      for (const [key, path] of Object.entries(fieldMapping)) {
+        if (key !== 'id' && key !== 'content' && path && typeof path === 'string') {
+          metadata[key] = this.extractField(item, path);
+        }
+      }
+
       return {
-        id: this.extractField(item, fieldMapping.id || 'id') || `doc-${index}`,
-        content: this.extractField(item, fieldMapping.content || 'content') || JSON.stringify(item),
-        metadata: item,
+        id: this.extractField(item, fieldMapping.id as string || 'id') || `doc-${index}`,
+        content: this.extractField(item, fieldMapping.content as string || 'content') || JSON.stringify(item),
+        metadata,
       };
     });
   }
 
   private async transformXmlToDocuments(
-    xmlData: string,
-    transform?: URLSource['transform']
+    _xmlData: string,
+    _transform?: URLSource['transform']
   ): Promise<RAGDocument[]> {
     // Placeholder for XML parsing (would use xml2js or similar)
     throw new Error('XML parsing not yet implemented. Please use JSON or CSV format.');
@@ -1285,7 +1394,7 @@ export class EcommerceRAGPlugin implements RAGPlugin {
     if (path.startsWith('$.')) {
       const parts = path.slice(2).split('.');
       let current = data;
-      
+
       for (const part of parts) {
         if (part.endsWith('[*]')) {
           const key = part.slice(0, -3);
@@ -1298,10 +1407,10 @@ export class EcommerceRAGPlugin implements RAGPlugin {
           current = current[part];
         }
       }
-      
+
       return current;
     }
-    
+
     return data;
   }
 
@@ -1309,7 +1418,7 @@ export class EcommerceRAGPlugin implements RAGPlugin {
     // Support nested field access (e.g., "variants[0].price")
     const parts = path.split('.');
     let current = item;
-    
+
     for (const part of parts) {
       if (part.includes('[')) {
         const [key, index] = part.split('[');
@@ -1318,10 +1427,10 @@ export class EcommerceRAGPlugin implements RAGPlugin {
       } else {
         current = current[part];
       }
-      
+
       if (current === undefined) return undefined;
     }
-    
+
     return current;
   }
 
@@ -1358,9 +1467,16 @@ export class EcommerceRAGPlugin implements RAGPlugin {
   }
 
   /**
-   * Cleanup
+   * Cleanup resources and close connections
    */
   async disconnect(): Promise<void> {
+    // Stop the cache cleanup interval
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+      this.cleanupInterval = undefined;
+    }
+
+    // Close MongoDB connection
     await this.client.close();
     this.db = null;
   }

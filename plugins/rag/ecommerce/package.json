@@ -31,6 +31,9 @@
   ],
   "author": "ViloTech",
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "peerDependencies": {
     "@snap-agent/core": "^0.1.0",
     "mongodb": "^6.0.0"
@@ -46,8 +49,9 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/vilo-hq/snap-agent",
-    "directory": "plugins/rag-ecommerce"
+    "directory": "plugins/rag/ecommerce"
   },
+  "homepage": "https://github.com/vilo-hq/snap-agent/tree/main/plugins/rag/ecommerce",
   "bugs": {
     "url": "https://github.com/vilo-hq/snap-agent/issues"
   }
