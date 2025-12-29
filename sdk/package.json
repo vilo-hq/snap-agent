@@ -1,7 +1,7 @@
 {
   "name": "@snap-agent/core",
   "version": "0.1.1",
-  "description": "SnapAgent - The lightweight, snap-in AI agent SDK. Multi-provider support (OpenAI, Anthropic, Google). Edge-runtime compatible.",
+  "description": "SnapAgent - The lightweight, snap-in AI agent SDK. Multi-provider support. Edge-runtime compatible.",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",

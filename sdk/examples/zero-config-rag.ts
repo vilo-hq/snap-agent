@@ -151,7 +151,7 @@ async function main() {
   console.log('Updating a document...\n');
 
   await agent.updateDocument('doc-1', {
-    content: 'SnapAgent is a lightweight, TypeScript-first SDK for building stateful AI agents with multi-provider support (OpenAI, Anthropic, Google). It has only 1 dependency and provides zero-config RAG.',
+    content: 'SnapAgent is a lightweight, TypeScript-first SDK for building stateful AI agents with multi-provider support. It has only 1 dependency and provides zero-config RAG.',
   });
 
   console.log('Document updated\n');
