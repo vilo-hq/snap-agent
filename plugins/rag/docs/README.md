@@ -85,6 +85,10 @@ const plugin = new DocsRAGPlugin({
   // Required
   embeddingProviderApiKey: process.env.OPENAI_API_KEY!,
 
+  // Embedding Provider (optional)
+  embeddingProvider: 'openai',  // 'openai' | 'voyage' (default: 'openai')
+  embeddingModel: 'text-embedding-3-small', // Model to use
+
   // Chunking
   chunkingStrategy: 'markdown', // 'markdown' | 'paragraph' | 'sentence' | 'fixed'
   maxChunkSize: 1000,           // Max characters per chunk
@@ -96,9 +100,39 @@ const plugin = new DocsRAGPlugin({
 
   // Options
   includeCode: true,            // Index code blocks
-  embeddingModel: 'text-embedding-3-small',
 });
 ```
+
+## Embedding Providers
+
+### OpenAI (Default)
+
+Best for English-focused documentation with excellent general-purpose embeddings.
+
+```typescript
+const plugin = new DocsRAGPlugin({
+  embeddingProviderApiKey: process.env.OPENAI_API_KEY!,
+  embeddingProvider: 'openai',
+  embeddingModel: 'text-embedding-3-small', // or 'text-embedding-3-large'
+});
+```
+
+### Voyage AI
+
+Better multilingual support and cost-effective for high-volume use cases.
+
+```typescript
+const plugin = new DocsRAGPlugin({
+  embeddingProviderApiKey: process.env.VOYAGE_API_KEY!,
+  embeddingProvider: 'voyage',
+  embeddingModel: 'voyage-3-lite', // or 'voyage-3', 'voyage-multilingual-2'
+});
+```
+
+| Provider | Default Model | Best For |
+|----------|--------------|----------|
+| OpenAI | `text-embedding-3-small` | English docs, simplicity |
+| Voyage | `voyage-3-lite` | Multilingual, cost optimization |
 
 ## Chunking Strategies
 
@@ -231,3 +265,9 @@ new DocsRAGPlugin(config: DocsRAGConfig)
 
 MIT © ViloTech
 
+## Support
+
+- [ViloTech]("https://vilotech.co")
+- [SnapAgent SDK](https://github.com/vilotech/snap-agent)
+- [Documentation](../../sdk/README.md)
+- [GitHub Issues](https://github.com/vilotech/snap-agent/issues)

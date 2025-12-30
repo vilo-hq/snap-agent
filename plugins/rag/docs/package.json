@@ -7,19 +7,22 @@
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "require": "./dist/index.js",
+      "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs",
-      "types": "./dist/index.d.ts"
+      "require": "./dist/index.js"
     }
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsup src/index.ts --format cjs,esm --dts --clean",
     "dev": "tsup src/index.ts --format cjs,esm --dts --watch",
-    "lint": "eslint src/"
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run build"
   },
   "keywords": [
     "snap-agent",
@@ -28,24 +31,32 @@
     "markdown",
     "search",
     "embeddings",
+    "vector-search",
     "ai",
     "plugin"
   ],
   "author": "ViloTech",
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "peerDependencies": {
     "@snap-agent/core": "^0.1.0"
   },
-  "dependencies": {},
   "devDependencies": {
-    "@types/node": "^20.0.0",
+    "@types/node": "^24.0.0",
     "tsup": "^8.0.0",
-    "typescript": "^5.0.0"
+    "typescript": "^5.8.0",
+    "vitest": "^3.2.4"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/vilotech/snap-agent",
+    "url": "git+https://github.com/vilo-hq/snap-agent.git",
     "directory": "plugins/rag/docs"
+  },
+  "homepage": "https://github.com/vilo-hq/snap-agent/tree/main/plugins/rag/docs",
+  "bugs": {
+    "url": "https://github.com/vilo-hq/snap-agent/issues"
   }
 }
 

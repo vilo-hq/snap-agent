@@ -10,6 +10,8 @@ import type {
 // Types
 // ============================================================================
 
+export type EmbeddingProvider = 'openai' | 'voyage';
+
 export interface DocsRAGConfig {
   /**
    * API key for embedding provider
@@ -18,13 +20,15 @@ export interface DocsRAGConfig {
 
   /**
    * Embedding provider to use
+   * - 'openai': OpenAI text-embedding models (default)
+   * - 'voyage': Voyage AI models (better multilingual support)
    * @default 'openai'
    */
-  embeddingProvider?: 'openai';
+  embeddingProvider?: EmbeddingProvider;
 
   /**
    * Embedding model
-   * @default 'text-embedding-3-small'
+   * @default 'text-embedding-3-small' for OpenAI, 'voyage-3-lite' for Voyage
    */
   embeddingModel?: string;
 
@@ -109,10 +113,17 @@ export class DocsRAGPlugin implements RAGPlugin {
   private documents: Map<string, RAGDocument> = new Map();
 
   constructor(config: DocsRAGConfig) {
+    const provider = config.embeddingProvider || 'openai';
+
+    // Set default model based on provider
+    const defaultModel = provider === 'voyage'
+      ? 'voyage-3-lite'
+      : 'text-embedding-3-small';
+
     this.config = {
       embeddingProviderApiKey: config.embeddingProviderApiKey,
-      embeddingProvider: config.embeddingProvider || 'openai',
-      embeddingModel: config.embeddingModel || 'text-embedding-3-small',
+      embeddingProvider: provider,
+      embeddingModel: config.embeddingModel || defaultModel,
       chunkingStrategy: config.chunkingStrategy || 'markdown',
       maxChunkSize: config.maxChunkSize || 1000,
       chunkOverlap: config.chunkOverlap || 200,
@@ -175,7 +186,7 @@ export class DocsRAGPlugin implements RAGPlugin {
       .slice(0, this.config.limit);
 
     // Format context with section headers
-    const content = this.formatContext(scoredChunks);
+    const content = this.formatChunksToContext(scoredChunks);
 
     return {
       content,
@@ -201,7 +212,7 @@ export class DocsRAGPlugin implements RAGPlugin {
   /**
    * Format retrieved chunks into context string
    */
-  private formatContext(chunks: Array<DocumentChunk & { score: number }>): string {
+  private formatChunksToContext(chunks: Array<DocumentChunk & { score: number }>): string {
     if (chunks.length === 0) return '';
 
     const sections: string[] = [];
@@ -258,7 +269,7 @@ export class DocsRAGPlugin implements RAGPlugin {
         // Generate embeddings for all chunks
         for (const chunk of chunks) {
           const embedding = await this.generateEmbedding(chunk.content);
-          
+
           const storedChunk: DocumentChunk = {
             id: `${doc.id}-chunk-${agentChunks.length}`,
             documentId: doc.id,
@@ -384,10 +395,10 @@ export class DocsRAGPlugin implements RAGPlugin {
           });
           currentChunk = '';
         }
-        
+
         // Update section
         currentSection = headingMatch[2];
-        
+
         // Add heading as its own chunk for searchability
         chunks.push({
           content: headingMatch[2],
@@ -538,16 +549,16 @@ export class DocsRAGPlugin implements RAGPlugin {
       throw new Error('agentId is required');
     }
 
-    // Remove existing chunks for this document
-    await this.delete(id, options);
-
-    // Get original document
+    // Get original document BEFORE deletion
     const docKey = `${options.agentId}:${id}`;
     const existing = this.documents.get(docKey);
 
     if (!existing && !document.content) {
       throw new Error(`Document not found: ${id}`);
     }
+
+    // Remove existing chunks for this document
+    await this.delete(id, options);
 
     // Re-ingest with updated content
     const updatedDoc: RAGDocument = {
@@ -590,9 +601,19 @@ export class DocsRAGPlugin implements RAGPlugin {
   }
 
   /**
-   * Generate embedding using OpenAI
+   * Generate embedding using configured provider (OpenAI or Voyage)
    */
   private async generateEmbedding(text: string): Promise<number[]> {
+    if (this.config.embeddingProvider === 'voyage') {
+      return this.generateVoyageEmbedding(text);
+    }
+    return this.generateOpenAIEmbedding(text);
+  }
+
+  /**
+   * Generate embedding using OpenAI
+   */
+  private async generateOpenAIEmbedding(text: string): Promise<number[]> {
     const response = await fetch('https://api.openai.com/v1/embeddings', {
       method: 'POST',
       headers: {
@@ -610,7 +631,32 @@ export class DocsRAGPlugin implements RAGPlugin {
       throw new Error(`OpenAI API error: ${response.status} - ${error}`);
     }
 
-    const data = await response.json();
+    const data = (await response.json()) as { data: Array<{ embedding: number[] }> };
+    return data.data[0].embedding;
+  }
+
+  /**
+   * Generate embedding using Voyage AI
+   */
+  private async generateVoyageEmbedding(text: string): Promise<number[]> {
+    const response = await fetch('https://api.voyageai.com/v1/embeddings', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${this.config.embeddingProviderApiKey}`,
+      },
+      body: JSON.stringify({
+        model: this.config.embeddingModel,
+        input: text,
+      }),
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`Voyage API error: ${response.status} - ${error}`);
+    }
+
+    const data = (await response.json()) as { data: Array<{ embedding: number[] }> };
     return data.data[0].embedding;
   }
 
