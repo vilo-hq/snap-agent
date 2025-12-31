@@ -1,6 +1,19 @@
 # @snap-agent/middleware-ratelimit
 
-Rate limiting middleware for SnapAgent SDK. Per-user, per-agent, or global rate limiting to prevent abuse and control costs.
+**Abuse prevention middleware for SnapAgent SDK** — Limit request frequency to protect against bots, DDoS, and API hammering.
+
+## Goal
+
+**Prevent abuse and protect your API.** Rate limiting stops bad actors from overwhelming your system with too many requests in a short time.
+
+| Rate Limit | Budget |
+|------------|--------|
+| Limits **frequency** (requests/second) | Limits **spending** (tokens/cost) |
+| Resets every few seconds/minutes | Resets daily/monthly |
+| Goal: **Abuse prevention** | Goal: **Cost control** |
+| "100 requests/minute per user" | "$10/day per user" |
+
+> 💡 Use **Rate Limit** to prevent API hammering. Use **[Budget](../budget)** to control costs.
 
 ## Installation
 

@@ -1,6 +1,19 @@
 # @snap-agent/middleware-budget
 
-Token budget middleware for SnapAgent SDK. Control token usage and costs with configurable limits.
+**Cost control middleware for SnapAgent SDK** — Set daily/monthly spending limits in dollars or tokens to prevent billing surprises.
+
+## Goal
+
+**Prevent runaway costs.** Budget middleware tracks cumulative token usage and costs over time (hours, days, months) and stops or downgrades requests before you exceed your spending limit.
+
+| Budget | Rate Limit |
+|--------|------------|
+| Limits **spending** (tokens/cost) | Limits **frequency** (requests/second) |
+| Resets daily/monthly | Resets every few seconds/minutes |
+| Goal: **Cost control** | Goal: **Abuse prevention** |
+| "$10/day per user" | "100 requests/minute per user" |
+
+> 💡 Use **Budget** to control costs. Use **[Rate Limit](../ratelimit)** to prevent API hammering.
 
 ## Installation
 

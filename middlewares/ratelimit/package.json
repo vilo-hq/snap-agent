@@ -1,7 +1,7 @@
 {
   "name": "@snap-agent/middleware-ratelimit",
   "version": "0.1.0",
-  "description": "Rate limiting middleware for SnapAgent SDK - Per-user rate limiting and abuse prevention.",
+  "description": "Abuse prevention middleware for SnapAgent SDK - Limit request frequency to protect against bots, DDoS, and API hammering.",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
