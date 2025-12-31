@@ -201,12 +201,45 @@ SnapAgent is built around a powerful plugin system. Extend your agents with any 
 | **Middleware Plugins** | Intercept and transform requests/responses | Rate limiting, content moderation, logging |
 | **Analytics Plugins** | Track usage and performance | Monitoring, billing, optimization |
 
-### Combining Multiple Plugins and Middlewares
+### Understanding Plugin Types
+
+All extensions are added to the `plugins` array, but they serve different purposes:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         plugins: [...]                          │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  MIDDLEWARES (run first, intercept requests)                   │
+│  ├── RateLimiter      → Abuse prevention (100 req/min)         │
+│  ├── TokenBudget      → Cost control ($10/day)                 │
+│  ├── ContentModeration → Block harmful content                 │
+│  └── SlackNotifications → Alert on errors                      │
+│                                                                 │
+│  PLUGINS (enhance agent capabilities)                          │
+│  ├── EcommerceRAGPlugin → Product search knowledge             │
+│  ├── DocsRAGPlugin      → Documentation knowledge              │
+│  └── CustomTools        → Callable functions                   │
+│                                                                 │
+│  ANALYTICS (run last, track everything)                        │
+│  ├── SnapAgentAnalytics → Full metrics suite                   │
+│  └── ConsoleAnalytics   → Dev-friendly logging                 │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Execution order is handled automatically** via the `priority` field:
+- Middlewares: priority 1-100 (run first)
+- RAG/Tools: priority 100-150
+- Analytics: priority 200+ (run last)
+
+### Combining Plugins and Middlewares
 
 ```typescript
 import { createClient, MemoryStorage } from '@snap-agent/core';
 import { EcommerceRAGPlugin } from '@snap-agent/rag-ecommerce';
 import { RateLimiter } from '@snap-agent/middleware-ratelimit';
+import { TokenBudget } from '@snap-agent/middleware-budget';
 import { SlackNotifications } from '@snap-agent/middleware-slack';
 import { ConsoleAnalytics } from '@snap-agent/analytics-console';
 
@@ -217,27 +250,35 @@ const agent = await client.createAgent({
   model: 'gpt-4o',
   userId: 'user-123',
   plugins: [
-    // RAG: Search product catalog
-    new EcommerceRAGPlugin({
+    // ─────────────────────────────────────────────────────────────
+    // MIDDLEWARES: Request/response interception (run first)
+    // ─────────────────────────────────────────────────────────────
+    new RateLimiter({                    // Abuse prevention
+      maxRequests: 100,
+      windowMs: 60000,
+    }),
+    new TokenBudget({                    // Cost control
+      maxCostPerPeriod: 10.00,
+      period: 'day',
+    }),
+    new SlackNotifications({             // Error alerts
+      webhookUrl: process.env.SLACK_WEBHOOK!,
+      triggers: { onError: true },
+    }),
+
+    // ─────────────────────────────────────────────────────────────
+    // PLUGINS: Agent capabilities (RAG, tools)
+    // ─────────────────────────────────────────────────────────────
+    new EcommerceRAGPlugin({             // Product knowledge
       mongoUri: process.env.MONGODB_URI!,
       openaiApiKey: process.env.OPENAI_API_KEY!,
       tenantId: 'my-store',
     }),
-    
-    // Middleware: Rate limiting
-    new RateLimiter({
-      maxRequests: 100,
-      windowMs: 60000,
-    }),
-    
-    // Middleware: Slack alerts on errors
-    new SlackNotifications({
-      webhookUrl: process.env.SLACK_WEBHOOK!,
-      onError: true,
-    }),
-    
-    // Analytics: Log everything
-    new ConsoleAnalytics(),
+
+    // ─────────────────────────────────────────────────────────────
+    // ANALYTICS: Tracking and monitoring (run last)
+    // ─────────────────────────────────────────────────────────────
+    new ConsoleAnalytics({ level: 'standard' }),
   ],
 });
 ```
@@ -278,14 +319,32 @@ class CustomAnalytics implements AnalyticsPlugin {
 }
 ```
 
-### Available Plugins
+### Available Packages
+
+**RAG Plugins** — Add knowledge to your agents:
 
 | Package | Description | Links |
 |---------|-------------|-------|
 | `@snap-agent/rag-ecommerce` | E-commerce product search with attribute extraction | [npm](https://www.npmjs.com/package/@snap-agent/rag-ecommerce) · [github](https://github.com/vilo-hq/snap-agent/tree/main/plugins/rag/ecommerce) |
 | `@snap-agent/rag-docs` | General documentation search | [github](https://github.com/vilo-hq/snap-agent/tree/main/plugins/rag/docs) |
-| `@snap-agent/analytics` | Analytics Core | [github](https://github.com/vilo-hq/snap-agent/tree/main/plugins/analytics/core) |
-| `@snap-agent/analytics-console` | Console logging analytics | [github](https://github.com/vilo-hq/snap-agent/tree/main/plugins/analytics/console) |
+
+**Middlewares** — Intercept requests/responses:
+
+| Package | Description | Links |
+|---------|-------------|-------|
+| `@snap-agent/middleware-ratelimit` | Abuse prevention (100 req/min) | [github](https://github.com/vilo-hq/snap-agent/tree/main/middlewares/ratelimit) |
+| `@snap-agent/middleware-budget` | Cost control ($10/day limits) | [github](https://github.com/vilo-hq/snap-agent/tree/main/middlewares/budget) |
+| `@snap-agent/middleware-slack` | Slack notifications | [github](https://github.com/vilo-hq/snap-agent/tree/main/middlewares/slack) |
+| `@snap-agent/middleware-discord` | Discord notifications | [github](https://github.com/vilo-hq/snap-agent/tree/main/middlewares/discord) |
+| `@snap-agent/middleware-webhooks` | Custom HTTP webhooks | [github](https://github.com/vilo-hq/snap-agent/tree/main/middlewares/webhooks) |
+| `@snap-agent/middleware-moderation` | Content moderation | [github](https://github.com/vilo-hq/snap-agent/tree/main/middlewares/moderation) |
+
+**Analytics** — Track usage and performance:
+
+| Package | Description | Links |
+|---------|-------------|-------|
+| `@snap-agent/analytics` | Full metrics suite (performance, cost, RAG, errors) | [github](https://github.com/vilo-hq/snap-agent/tree/main/plugins/analytics/core) |
+| `@snap-agent/analytics-console` | Dev-friendly console logging | [github](https://github.com/vilo-hq/snap-agent/tree/main/plugins/analytics/console) |
 
 
 ## Zero-Config RAG

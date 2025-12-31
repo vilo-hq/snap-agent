@@ -34,8 +34,13 @@ const client = createClient({
 
 const agent = await client.createAgent({
   name: 'Support Agent',
-  plugins: [slack],
-  // ...
+  plugins: [
+    // ─── Middlewares (request/response interception) ───
+    slack,
+    
+    // ─── Plugins (agent capabilities) ───
+    // yourRAGPlugin,
+  ],
 });
 ```
 

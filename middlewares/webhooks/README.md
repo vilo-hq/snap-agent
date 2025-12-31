@@ -23,8 +23,14 @@ const webhook = new WebhookNotifier({
 });
 
 const agent = await client.createAgent({
-  plugins: [webhook],
-  // ...
+  name: 'My Agent',
+  plugins: [
+    // ─── Middlewares (request/response interception) ───
+    webhook,
+    
+    // ─── Plugins (agent capabilities) ───
+    // yourRAGPlugin,
+  ],
 });
 ```
 
