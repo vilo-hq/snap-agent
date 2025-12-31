@@ -284,17 +284,12 @@ class CustomAnalytics implements AnalyticsPlugin {
 
 ### Available Plugins
 
-| Package | Description |
-|---------|-------------|
-| `@snap-agent/rag-ecommerce` | E-commerce product search with attribute extraction |
-| `@snap-agent/rag-support` | Support ticket and documentation search |
-| `@snap-agent/rag-docs` | General documentation search |
-| `@snap-agent/middleware-ratelimit` | Request rate limiting |
-| `@snap-agent/middleware-moderation` | Content moderation |
-| `@snap-agent/middleware-slack` | Slack notifications |
-| `@snap-agent/middleware-discord` | Discord notifications |
-| `@snap-agent/middleware-webhooks` | Custom webhook notifications |
-| `@snap-agent/analytics-console` | Console logging analytics |
+| Package | Description | Links |
+|---------|-------------|-------|
+| `@snap-agent/rag-ecommerce` | E-commerce product search with attribute extraction | [npm](https://www.npmjs.com/package/@snap-agent/rag-ecommerce) · [github](https://github.com/vilo-hq/snap-agent/tree/main/plugins/rag/ecommerce) |
+| `@snap-agent/rag-docs` | General documentation search | [github](https://github.com/vilo-hq/snap-agent/tree/main/plugins/rag/docs) |
+| `@snap-agent/analytics` | Analytics Core | [github](https://github.com/vilo-hq/snap-agent/tree/main/plugins/analytics/core) |
+| `@snap-agent/analytics-console` | Console logging analytics | [github](https://github.com/vilo-hq/snap-agent/tree/main/plugins/analytics/console) |
 
 ## Zero-Config RAG
 

@@ -283,6 +283,9 @@ class CustomAnalytics implements AnalyticsPlugin {
 | Package | Description | Links |
 |---------|-------------|-------|
 | `@snap-agent/rag-ecommerce` | E-commerce product search with attribute extraction | [npm](https://www.npmjs.com/package/@snap-agent/rag-ecommerce) · [github](https://github.com/vilo-hq/snap-agent/tree/main/plugins/rag/ecommerce) |
+| `@snap-agent/rag-docs` | General documentation search | [github](https://github.com/vilo-hq/snap-agent/tree/main/plugins/rag/docs) |
+| `@snap-agent/analytics` | Analytics Core | [github](https://github.com/vilo-hq/snap-agent/tree/main/plugins/analytics/core) |
+| `@snap-agent/analytics-console` | Console logging analytics | [github](https://github.com/vilo-hq/snap-agent/tree/main/plugins/analytics/console) |
 
 
 ## Zero-Config RAG
