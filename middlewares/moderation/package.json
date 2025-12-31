@@ -1,25 +1,32 @@
 {
   "name": "@snap-agent/middleware-moderation",
   "version": "0.1.0",
-  "description": "Content moderation middleware for SnapAgent SDK - PII detection, profanity filtering, and toxicity detection.",
+  "description": "Content moderation middleware for SnapAgent SDK - PII detection, profanity filtering, and safety guardrails.",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
   "scripts": {
     "build": "tsup src/index.ts --format cjs,esm --dts --clean",
     "dev": "tsup src/index.ts --format cjs,esm --dts --watch",
-    "test": "vitest",
-    "lint": "eslint src/",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "prepublishOnly": "npm run build"
   },
   "keywords": [
+    "snap-agent",
     "ai",
     "agents",
     "llm",
     "middleware",
     "moderation",
     "pii",
-    "profanity",
     "safety",
     "guardrails",
     "typescript",
@@ -27,27 +34,30 @@
   ],
   "author": "ViloTech",
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "peerDependencies": {
     "@snap-agent/core": "^0.1.0"
   },
   "devDependencies": {
-    "@types/node": "^20.0.0",
+    "@types/node": "^24.0.0",
     "tsup": "^8.0.0",
-    "typescript": "^5.0.0",
-    "vitest": "^1.0.0",
-    "eslint": "^8.0.0"
+    "typescript": "^5.8.0",
+    "vitest": "^3.2.4"
   },
   "files": [
     "dist",
+    "README.md",
     "LICENSE"
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/vilo-hq/snap-agent",
+    "url": "git+https://github.com/vilo-hq/snap-agent.git",
     "directory": "middlewares/moderation"
   },
+  "homepage": "https://github.com/vilo-hq/snap-agent/tree/main/middlewares/moderation",
   "bugs": {
     "url": "https://github.com/vilo-hq/snap-agent/issues"
   }
 }
-

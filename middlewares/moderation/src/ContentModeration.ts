@@ -3,7 +3,7 @@ import type { MiddlewarePlugin } from '@snap-agent/core';
 /**
  * Types of PII that can be detected
  */
-export type PIIType = 
+export type PIIType =
   | 'email'
   | 'phone'
   | 'ssn'
@@ -15,7 +15,7 @@ export type PIIType =
 /**
  * Action to take on violation
  */
-export type ViolationAction = 
+export type ViolationAction =
   | 'block'     // Reject the message entirely
   | 'mask'      // Replace sensitive content with [REDACTED]
   | 'warn'      // Allow but log a warning
@@ -120,10 +120,10 @@ export interface ModerationConfig {
   blockedOutputMessage?: string;
 }
 
-// Common profanity list (basic, you'd want a more comprehensive list in production)
+// Common profanity list (basic, needs a more comprehensive list in production.)
 const DEFAULT_PROFANITY = [
   'damn', 'hell', 'ass', 'shit', 'fuck', 'bitch', 'bastard',
-  // Add more as needed
+  // Add more as needed using the customWords option (config.profanityFilter.customWords).
 ];
 
 // PII regex patterns
@@ -208,15 +208,15 @@ export class ContentModeration implements MiddlewarePlugin {
     }
 
     const lastMessage = messages[messages.length - 1];
-    const content = typeof lastMessage === 'string' 
-      ? lastMessage 
+    const content = typeof lastMessage === 'string'
+      ? lastMessage
       : lastMessage?.content || '';
 
     const result = await this.moderate(content, 'input');
 
     if (!result.passed) {
       const hasBlock = result.violations.some((v) => v.action === 'block');
-      
+
       if (hasBlock) {
         this.config.onBlock?.(result, {
           agentId: context.agentId,
@@ -357,7 +357,7 @@ export class ContentModeration implements MiddlewarePlugin {
     if (this.config.profanityFilter?.enabled) {
       const profanityAction = this.config.profanityFilter.action || 'mask';
       const words = text.split(/\s+/);
-      
+
       for (let i = 0; i < words.length; i++) {
         const word = words[i].toLowerCase().replace(/[^a-z]/g, '');
         if (this.profanitySet.has(word)) {
