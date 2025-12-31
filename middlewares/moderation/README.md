@@ -32,8 +32,14 @@ const moderation = new ContentModeration({
 });
 
 const agent = await client.createAgent({
-  plugins: [moderation],
-  // ...
+  name: 'My Agent',
+  plugins: [
+    // ─── Middlewares (request/response interception) ───
+    moderation,  // Content moderation - runs first
+    
+    // ─── Plugins (agent capabilities) ───
+    // yourRAGPlugin,
+  ],
 });
 ```
 

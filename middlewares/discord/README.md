@@ -24,8 +24,14 @@ const discord = new DiscordNotifications({
 });
 
 const agent = await client.createAgent({
-  plugins: [discord],
-  // ...
+  name: 'My Agent',
+  plugins: [
+    // ─── Middlewares (request/response interception) ───
+    discord,
+    
+    // ─── Plugins (agent capabilities) ───
+    // yourRAGPlugin,
+  ],
 });
 ```
 

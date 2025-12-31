@@ -35,8 +35,14 @@ const rateLimiter = new RateLimiter({
 });
 
 const agent = await client.createAgent({
-  plugins: [rateLimiter],
-  // ...
+  name: 'My Agent',
+  plugins: [
+    // ─── Middlewares (request/response interception) ───
+    rateLimiter,  // Abuse prevention - runs first
+    
+    // ─── Plugins (agent capabilities) ───
+    // yourRAGPlugin,
+  ],
 });
 ```
 

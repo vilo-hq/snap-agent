@@ -38,8 +38,14 @@ const budget = new TokenBudget({
 });
 
 const agent = await client.createAgent({
-  plugins: [budget],
-  // ...
+  name: 'My Agent',
+  plugins: [
+    // ─── Middlewares (request/response interception) ───
+    budget,  // Cost control - runs first
+    
+    // ─── Plugins (agent capabilities) ───
+    // yourRAGPlugin,
+  ],
 });
 ```
 
