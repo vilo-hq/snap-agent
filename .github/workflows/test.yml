@@ -28,26 +28,25 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
-          cache: 'pnpm'
-          cache-dependency-path: |
-            sdk/pnpm-lock.yaml
-            middlewares/budget/pnpm-lock.yaml
-            middlewares/ratelimit/pnpm-lock.yaml
-            middlewares/moderation/pnpm-lock.yaml
-            middlewares/discord/pnpm-lock.yaml
-            middlewares/slack/pnpm-lock.yaml
-            middlewares/webhooks/pnpm-lock.yaml
-            plugins/analytics/core/pnpm-lock.yaml
-            plugins/analytics/console/pnpm-lock.yaml
-            plugins/rag/docs/pnpm-lock.yaml
-            plugins/rag/ecommerce/pnpm-lock.yaml
+      
+      - name: Get pnpm store directory
+        shell: bash
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
+      
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/package.json') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
       
       # =======================================================================
       # SDK Tests
       # =======================================================================
       - name: Install SDK dependencies
         working-directory: sdk
-        run: pnpm install --frozen-lockfile
+        run: pnpm install
       
       - name: Run SDK tests
         working-directory: sdk
@@ -59,37 +58,37 @@ jobs:
       - name: Install & Test middleware-budget
         working-directory: middlewares/budget
         run: |
-          pnpm install --frozen-lockfile
+          pnpm install
           pnpm test
       
       - name: Install & Test middleware-ratelimit
         working-directory: middlewares/ratelimit
         run: |
-          pnpm install --frozen-lockfile
+          pnpm install
           pnpm test
       
       - name: Install & Test middleware-moderation
         working-directory: middlewares/moderation
         run: |
-          pnpm install --frozen-lockfile
+          pnpm install
           pnpm test
       
       - name: Install & Test middleware-discord
         working-directory: middlewares/discord
         run: |
-          pnpm install --frozen-lockfile
+          pnpm install
           pnpm test
       
       - name: Install & Test middleware-slack
         working-directory: middlewares/slack
         run: |
-          pnpm install --frozen-lockfile
+          pnpm install
           pnpm test
       
       - name: Install & Test middleware-webhooks
         working-directory: middlewares/webhooks
         run: |
-          pnpm install --frozen-lockfile
+          pnpm install
           pnpm test
       
       # =======================================================================
@@ -98,19 +97,19 @@ jobs:
       - name: Install & Test analytics-core
         working-directory: plugins/analytics/core
         run: |
-          pnpm install --frozen-lockfile
+          pnpm install
           pnpm test
       
       - name: Install & Test analytics-console
         working-directory: plugins/analytics/console
         run: |
-          pnpm install --frozen-lockfile
+          pnpm install
           pnpm test
       
       - name: Install & Test rag-docs
         working-directory: plugins/rag/docs
         run: |
-          pnpm install --frozen-lockfile
+          pnpm install
           pnpm test
 
   build:
@@ -131,83 +130,82 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20.x
-          cache: 'pnpm'
-          cache-dependency-path: |
-            sdk/pnpm-lock.yaml
-            middlewares/budget/pnpm-lock.yaml
-            middlewares/ratelimit/pnpm-lock.yaml
-            middlewares/moderation/pnpm-lock.yaml
-            middlewares/discord/pnpm-lock.yaml
-            middlewares/slack/pnpm-lock.yaml
-            middlewares/webhooks/pnpm-lock.yaml
-            plugins/analytics/core/pnpm-lock.yaml
-            plugins/analytics/console/pnpm-lock.yaml
-            plugins/rag/docs/pnpm-lock.yaml
-            plugins/rag/ecommerce/pnpm-lock.yaml
+      
+      - name: Get pnpm store directory
+        shell: bash
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
+      
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/package.json') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
       
       # Build all packages to verify no build errors
       - name: Build SDK
         working-directory: sdk
         run: |
-          pnpm install --frozen-lockfile
+          pnpm install
           pnpm build
       
       - name: Build middleware-budget
         working-directory: middlewares/budget
         run: |
-          pnpm install --frozen-lockfile
+          pnpm install
           pnpm build
       
       - name: Build middleware-ratelimit
         working-directory: middlewares/ratelimit
         run: |
-          pnpm install --frozen-lockfile
+          pnpm install
           pnpm build
       
       - name: Build middleware-moderation
         working-directory: middlewares/moderation
         run: |
-          pnpm install --frozen-lockfile
+          pnpm install
           pnpm build
       
       - name: Build middleware-discord
         working-directory: middlewares/discord
         run: |
-          pnpm install --frozen-lockfile
+          pnpm install
           pnpm build
       
       - name: Build middleware-slack
         working-directory: middlewares/slack
         run: |
-          pnpm install --frozen-lockfile
+          pnpm install
           pnpm build
       
       - name: Build middleware-webhooks
         working-directory: middlewares/webhooks
         run: |
-          pnpm install --frozen-lockfile
+          pnpm install
           pnpm build
       
       - name: Build analytics-core
         working-directory: plugins/analytics/core
         run: |
-          pnpm install --frozen-lockfile
+          pnpm install
           pnpm build
       
       - name: Build analytics-console
         working-directory: plugins/analytics/console
         run: |
-          pnpm install --frozen-lockfile
+          pnpm install
           pnpm build
       
       - name: Build rag-docs
         working-directory: plugins/rag/docs
         run: |
-          pnpm install --frozen-lockfile
+          pnpm install
           pnpm build
       
       - name: Build rag-ecommerce
         working-directory: plugins/rag/ecommerce
         run: |
-          pnpm install --frozen-lockfile
+          pnpm install
           pnpm build
