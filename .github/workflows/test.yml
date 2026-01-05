@@ -31,8 +31,16 @@ jobs:
           cache: 'pnpm'
           cache-dependency-path: |
             sdk/pnpm-lock.yaml
-            middlewares/*/pnpm-lock.yaml
-            plugins/*/*/pnpm-lock.yaml
+            middlewares/budget/pnpm-lock.yaml
+            middlewares/ratelimit/pnpm-lock.yaml
+            middlewares/moderation/pnpm-lock.yaml
+            middlewares/discord/pnpm-lock.yaml
+            middlewares/slack/pnpm-lock.yaml
+            middlewares/webhooks/pnpm-lock.yaml
+            plugins/analytics/core/pnpm-lock.yaml
+            plugins/analytics/console/pnpm-lock.yaml
+            plugins/rag/docs/pnpm-lock.yaml
+            plugins/rag/ecommerce/pnpm-lock.yaml
       
       # =======================================================================
       # SDK Tests
@@ -123,6 +131,19 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20.x
+          cache: 'pnpm'
+          cache-dependency-path: |
+            sdk/pnpm-lock.yaml
+            middlewares/budget/pnpm-lock.yaml
+            middlewares/ratelimit/pnpm-lock.yaml
+            middlewares/moderation/pnpm-lock.yaml
+            middlewares/discord/pnpm-lock.yaml
+            middlewares/slack/pnpm-lock.yaml
+            middlewares/webhooks/pnpm-lock.yaml
+            plugins/analytics/core/pnpm-lock.yaml
+            plugins/analytics/console/pnpm-lock.yaml
+            plugins/rag/docs/pnpm-lock.yaml
+            plugins/rag/ecommerce/pnpm-lock.yaml
       
       # Build all packages to verify no build errors
       - name: Build SDK
@@ -131,25 +152,62 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm build
       
-      - name: Build middlewares
+      - name: Build middleware-budget
+        working-directory: middlewares/budget
         run: |
-          for dir in middlewares/*/; do
-            echo "Building $dir"
-            cd "$dir"
-            pnpm install --frozen-lockfile
-            pnpm build
-            cd ../..
-          done
+          pnpm install --frozen-lockfile
+          pnpm build
       
-      - name: Build plugins
+      - name: Build middleware-ratelimit
+        working-directory: middlewares/ratelimit
         run: |
-          for dir in plugins/*/*/; do
-            if [ -f "$dir/package.json" ]; then
-              echo "Building $dir"
-              cd "$dir"
-              pnpm install --frozen-lockfile
-              pnpm build || echo "Build failed for $dir (may be expected if not fully implemented)"
-              cd ../../..
-            fi
-          done
-
+          pnpm install --frozen-lockfile
+          pnpm build
+      
+      - name: Build middleware-moderation
+        working-directory: middlewares/moderation
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+      
+      - name: Build middleware-discord
+        working-directory: middlewares/discord
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+      
+      - name: Build middleware-slack
+        working-directory: middlewares/slack
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+      
+      - name: Build middleware-webhooks
+        working-directory: middlewares/webhooks
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+      
+      - name: Build analytics-core
+        working-directory: plugins/analytics/core
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+      
+      - name: Build analytics-console
+        working-directory: plugins/analytics/console
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+      
+      - name: Build rag-docs
+        working-directory: plugins/rag/docs
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+      
+      - name: Build rag-ecommerce
+        working-directory: plugins/rag/ecommerce
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
