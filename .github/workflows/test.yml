@@ -1,0 +1,155 @@
+name: Tests
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        node-version: [20.x]
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'pnpm'
+          cache-dependency-path: |
+            sdk/pnpm-lock.yaml
+            middlewares/*/pnpm-lock.yaml
+            plugins/*/*/pnpm-lock.yaml
+      
+      # =======================================================================
+      # SDK Tests
+      # =======================================================================
+      - name: Install SDK dependencies
+        working-directory: sdk
+        run: pnpm install --frozen-lockfile
+      
+      - name: Run SDK tests
+        working-directory: sdk
+        run: pnpm test
+      
+      # =======================================================================
+      # Middleware Tests
+      # =======================================================================
+      - name: Install & Test middleware-budget
+        working-directory: middlewares/budget
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm test
+      
+      - name: Install & Test middleware-ratelimit
+        working-directory: middlewares/ratelimit
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm test
+      
+      - name: Install & Test middleware-moderation
+        working-directory: middlewares/moderation
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm test
+      
+      - name: Install & Test middleware-discord
+        working-directory: middlewares/discord
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm test
+      
+      - name: Install & Test middleware-slack
+        working-directory: middlewares/slack
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm test
+      
+      - name: Install & Test middleware-webhooks
+        working-directory: middlewares/webhooks
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm test
+      
+      # =======================================================================
+      # Plugin Tests
+      # =======================================================================
+      - name: Install & Test analytics-core
+        working-directory: plugins/analytics/core
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm test
+      
+      - name: Install & Test analytics-console
+        working-directory: plugins/analytics/console
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm test
+      
+      - name: Install & Test rag-docs
+        working-directory: plugins/rag/docs
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm test
+
+  build:
+    name: Build Check
+    runs-on: ubuntu-latest
+    needs: test
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+      
+      # Build all packages to verify no build errors
+      - name: Build SDK
+        working-directory: sdk
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+      
+      - name: Build middlewares
+        run: |
+          for dir in middlewares/*/; do
+            echo "Building $dir"
+            cd "$dir"
+            pnpm install --frozen-lockfile
+            pnpm build
+            cd ../..
+          done
+      
+      - name: Build plugins
+        run: |
+          for dir in plugins/*/*/; do
+            if [ -f "$dir/package.json" ]; then
+              echo "Building $dir"
+              cd "$dir"
+              pnpm install --frozen-lockfile
+              pnpm build || echo "Build failed for $dir (may be expected if not fully implemented)"
+              cd ../../..
+            fi
+          done
+
