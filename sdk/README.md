@@ -10,6 +10,7 @@
 | **Bundle Size** | ~63 KB | ~150 KB | ~2 MB+ |
 | **Multi-Provider** | OpenAI, Anthropic, Google | OpenAI only | ✅ |
 | **Plugin Architecture** | RAG, Tools, Middleware, Analytics | Tools only | Chains |
+| **Plugin Persistence** | ✅ Registry pattern | ❌ | ❌ |
 | **Persistent Storage** | Upstash, MongoDB, Memory | In-memory only | Via integrations |
 | **Zero-Config RAG** | Built-in | Manual | Manual |
 
@@ -18,6 +19,7 @@
 - **Multi-Provider** — Switch between OpenAI, Anthropic, and Google seamlessly  
 - **Edge Runtime** — Deploy to Cloudflare Workers, Vercel Edge, Deno Deploy  
 - **Plugin Architecture** — Extend with RAG, tools, middleware, and analytics plugins  
+- **Plugin Persistence** — Plugins survive server restarts via the Plugin Registry  
 - **Persistent Storage** — Upstash Redis (edge), MongoDB (server), or bring your own  
 - **Zero-Config RAG** — Add semantic search with one line of config  
 - **Stateful Threads** — Automatic conversation history management  
@@ -317,6 +319,203 @@ class CustomAnalytics implements AnalyticsPlugin {
     await myAnalyticsService.track('agent_response', data);
   }
 }
+```
+
+### Plugin Persistence with Plugin Registry
+
+Plugins are runtime objects (classes with methods, database connections, etc.) that can't be directly saved to a database. The **Plugin Registry** solves this by:
+
+1. Storing serializable plugin configurations in your database
+2. Automatically reinstantiating plugins when you load an agent after a process restart
+
+#### Why Plugin Persistence Matters
+
+Without the Plugin Registry, you'd lose all plugins when:
+- Your server restarts
+- A request is routed to a different server instance
+- You load an agent from the database in a new process
+
+#### Setting Up the Plugin Registry
+
+```typescript
+import { 
+  createClient, 
+  PluginRegistry, 
+  MongoDBStorage 
+} from '@snap-agent/core';
+import { EcommerceRAGPlugin } from '@snap-agent/rag-ecommerce';
+import { RateLimiter } from '@snap-agent/middleware-ratelimit';
+
+// 1. Create and configure the registry
+const registry = new PluginRegistry();
+
+// 2. Register plugin factories (plugin name → factory function)
+registry.register('@snap-agent/rag-ecommerce', (config) => 
+  new EcommerceRAGPlugin(config)
+);
+
+registry.register('@snap-agent/middleware-ratelimit', (config) => 
+  new RateLimiter(config)
+);
+
+// 3. Create client with registry
+const client = createClient({
+  storage: new MongoDBStorage(process.env.MONGODB_URI!),
+  providers: { openai: { apiKey: process.env.OPENAI_API_KEY! } },
+  pluginRegistry: registry,  // ← Enable automatic plugin reinstantiation
+});
+```
+
+#### Making Plugins Persistable
+
+For a plugin's configuration to be saved, it must implement the `getConfig()` method:
+
+```typescript
+class MyRAGPlugin implements RAGPlugin {
+  type = 'rag' as const;
+  name = '@myorg/my-rag-plugin';  // Unique identifier
+  
+  private config: MyPluginConfig;
+
+  constructor(config: MyPluginConfig) {
+    this.config = config;
+  }
+
+  // Return serializable configuration
+  // Use env var references for sensitive values!
+  getConfig() {
+    return {
+      // Safe: Use env var reference (not the actual secret)
+      apiKey: '${MY_API_KEY}',
+      mongoUri: '${MONGODB_URI}',
+      
+      // Safe: Non-sensitive values stored directly
+      embeddingModel: this.config.embeddingModel,
+      limit: this.config.limit,
+    };
+  }
+
+  async retrieveContext(message: string, options: any) {
+    // ... implementation
+  }
+}
+```
+
+#### Environment Variable References
+
+Store sensitive values (API keys, connection strings) as environment variable references instead of actual values:
+
+```typescript
+// ✅ GOOD: Environment variable references (safe to store in DB)
+getConfig() {
+  return {
+    openaiKey: '${OPENAI_API_KEY}',           // Required env var
+    timeout: '${TIMEOUT:5000}',                // With default value
+    mongoUri: '${MONGODB_URI}',
+  };
+}
+
+// ❌ BAD: Actual secrets (never store in database!)
+getConfig() {
+  return {
+    openaiKey: 'sk-actual-secret-key',  // Don't do this!
+  };
+}
+```
+
+The `envRef()` helper makes this cleaner:
+
+```typescript
+import { envRef } from '@snap-agent/core';
+
+getConfig() {
+  return {
+    apiKey: envRef('OPENAI_API_KEY'),           // Required
+    timeout: envRef('TIMEOUT', '5000'),          // With default
+  };
+}
+```
+
+#### Complete Example: Persistent Agents
+
+```typescript
+import { createClient, PluginRegistry, MongoDBStorage, envRef } from '@snap-agent/core';
+import { EcommerceRAGPlugin } from '@snap-agent/rag-ecommerce';
+
+// Setup registry
+const registry = new PluginRegistry();
+registry.register('@snap-agent/rag-ecommerce', (config) => 
+  new EcommerceRAGPlugin(config)
+);
+
+const client = createClient({
+  storage: new MongoDBStorage(process.env.MONGODB_URI!),
+  providers: { openai: { apiKey: process.env.OPENAI_API_KEY! } },
+  pluginRegistry: registry,
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// INITIAL SETUP (run once)
+// ═══════════════════════════════════════════════════════════════════════════
+
+const agent = await client.createAgent({
+  name: 'Shopping Assistant',
+  instructions: 'Help customers find products.',
+  provider: 'openai',
+  model: 'gpt-4o',
+  userId: 'user-123',
+  plugins: [
+    new EcommerceRAGPlugin({
+      mongoUri: process.env.MONGODB_URI!,
+      voyageApiKey: process.env.VOYAGE_API_KEY!,
+      tenantId: 'my-store',
+    }),
+  ],
+});
+
+console.log('Agent created:', agent.id);
+// Plugin config is automatically extracted and saved to MongoDB!
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AFTER SERVER RESTART (plugins automatically reinstantiated)
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Later, in a different process or after restart:
+const loadedAgent = await client.getAgent('agent-123');
+
+// ✅ Plugins are automatically reinstantiated from stored config!
+// The registry looked up '@snap-agent/rag-ecommerce' and called its factory
+// with the stored config (env vars resolved at runtime)
+
+const response = await client.chat({
+  threadId: 'thread-456',
+  message: 'Find me a red dress under $100',
+  useRAG: true,  // RAG plugin works!
+});
+```
+
+#### Plugin Loading Priority
+
+When loading an agent, plugins are resolved in this order:
+
+1. **Direct plugins** (highest priority) — Plugins passed to `getAgent()`
+2. **Registry** — Reinstantiate from stored configs using registered factories  
+3. **None** — Agent loads without plugins
+
+```typescript
+// Priority 1: Direct plugins (override stored configs)
+const agent = await client.getAgent('agent-123', {
+  plugins: [new CustomPlugin()],  // Uses this, ignores stored configs
+});
+
+// Priority 2: Use registry (automatic from client config)
+const agent = await client.getAgent('agent-123');
+// Uses registry to reinstantiate from stored configs
+
+// Priority 3: Override registry for this call
+const agent = await client.getAgent('agent-123', {
+  registry: differentRegistry,
+});
 ```
 
 ### Available Packages
@@ -658,6 +857,7 @@ See [EDGE_RUNTIME.md](./EDGE_RUNTIME.md) for complete documentation.
 | Edge Compatible | ✅ | ❌ | ❌ | ✅ |
 | Multi-Provider | ✅ | OpenAI only | ✅ | ✅ |
 | Plugin Architecture | RAG, Tools, Middleware | Tools only | Chains | No |
+| Plugin Persistence | ✅ Registry pattern | ❌ | ❌ | N/A |
 | Persistent Storage | Upstash, MongoDB | In-memory | Via integrations | No |
 | Zero-Config RAG | ✅ | ❌ | ❌ | ❌ |
 | Agent Management | ✅ | ✅ | Complex | No |

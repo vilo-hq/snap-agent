@@ -259,7 +259,12 @@ describe('AgentClient', () => {
 
       const agent = await client.getAgent('agent-1');
 
-      expect(Agent.load).toHaveBeenCalledWith('agent-1', storage, expect.anything());
+      expect(Agent.load).toHaveBeenCalledWith(
+        'agent-1',
+        storage,
+        expect.anything(),
+        expect.objectContaining({ plugins: undefined, registry: undefined })
+      );
       expect(agent).toBe(mockAgent);
     });
 
@@ -371,7 +376,12 @@ describe('AgentClient', () => {
         userId: 'user-123',
       });
 
-      expect(Agent.load).toHaveBeenCalledWith('agent-1', storage, expect.anything());
+      expect(Agent.load).toHaveBeenCalledWith(
+        'agent-1',
+        storage,
+        expect.anything(),
+        expect.objectContaining({ plugins: undefined, registry: undefined })
+      );
       expect(Thread.create).toHaveBeenCalled();
       expect(thread).toBe(mockThread);
     });

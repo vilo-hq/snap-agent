@@ -9,6 +9,7 @@ import {
   MessageRole,
   MessageAttachment,
   AgentFile,
+  StoredPluginConfig,
 } from '../types';
 
 interface AgentDocument {
@@ -25,6 +26,7 @@ interface AgentDocument {
   updatedAt: Date;
   files: AgentFile[];
   metadata?: Record<string, any>;
+  pluginConfigs?: StoredPluginConfig[];
 }
 
 interface ThreadDocument {
@@ -120,6 +122,7 @@ export class MongoDBStorage implements StorageAdapter {
       updatedAt: new Date(),
       files: [],
       metadata: config.metadata || {},
+      pluginConfigs: config.pluginConfigs || [],
     };
 
     const result = await collection.insertOne(doc);
@@ -362,6 +365,7 @@ export class MongoDBStorage implements StorageAdapter {
       updatedAt: doc.updatedAt,
       files: doc.files,
       metadata: doc.metadata,
+      pluginConfigs: doc.pluginConfigs,
     };
   }
 
