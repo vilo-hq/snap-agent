@@ -1,4 +1,4 @@
-import type { Plugin } from './plugins';
+import type { Plugin, StoredPluginConfig } from './plugins';
 
 // ============================================================================
 // Provider Types
@@ -66,8 +66,9 @@ export interface AgentConfig {
   metadata?: Record<string, any>;
   organizationId?: string;
   phone?: string;
-  plugins?: Plugin[]; // NEW: Support for plugins
-  rag?: RAGConfig; // NEW: Zero-config RAG support
+  plugins?: Plugin[]; // Runtime plugin instances (not persisted)
+  pluginConfigs?: StoredPluginConfig[]; // Serializable plugin configs (persisted to storage)
+  rag?: RAGConfig; // Zero-config RAG support
 }
 
 export interface AgentData extends AgentConfig {
@@ -196,9 +197,24 @@ export interface StorageAdapter {
 // Client Config
 // ============================================================================
 
+/**
+ * Plugin registry for reinstantiating plugins from stored configs
+ * Import from '@snap-agent/core' or create your own instance
+ */
+export interface PluginRegistryInterface {
+  instantiateAll(storedConfigs: StoredPluginConfig[]): Promise<Plugin[]>;
+  isRegistered(name: string): boolean;
+}
+
 export interface ClientConfig {
   storage: StorageAdapter;
   providers: ProviderConfig;
+  /**
+   * Optional plugin registry for automatic plugin reinstantiation
+   * When provided, agents loaded with getAgent() will automatically
+   * reinstantiate their plugins from stored configurations
+   */
+  pluginRegistry?: PluginRegistryInterface;
 }
 
 // ============================================================================
@@ -277,5 +293,7 @@ export type {
   RequestTrackingData,
   ResponseTrackingData,
   ErrorTrackingData,
+  // Plugin persistence
+  StoredPluginConfig,
 } from './plugins';
 

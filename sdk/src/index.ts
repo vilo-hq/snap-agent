@@ -9,6 +9,15 @@ export { Agent } from './core/Agent';
 export { Thread } from './core/Thread';
 export { PluginManager } from './core/PluginManager';
 
+// Plugin Registry (for plugin persistence)
+export {
+  PluginRegistry,
+  pluginRegistry, // Default global instance
+  resolveEnvVars,
+  envRef,
+} from './core/PluginRegistry';
+export type { PluginFactory } from './core/PluginRegistry';
+
 // Providers
 export { ProviderFactory, Models } from './providers';
 
@@ -60,6 +69,9 @@ export type {
   RequestTrackingData,
   ResponseTrackingData,
   ErrorTrackingData,
+  // Plugin persistence
+  StoredPluginConfig,
+  PluginRegistryInterface,
 } from './types';
 
 // Errors

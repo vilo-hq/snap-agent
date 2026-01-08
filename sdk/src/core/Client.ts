@@ -1,6 +1,7 @@
 import { Agent } from './Agent';
 import { Thread } from './Thread';
 import { ProviderFactory } from '../providers';
+import { PluginRegistry } from './PluginRegistry';
 import {
   ClientConfig,
   AgentConfig,
@@ -13,6 +14,7 @@ import {
   InvalidConfigError,
   AgentNotFoundError,
   ThreadNotFoundError,
+  Plugin,
 } from '../types';
 import { DefaultRAGPlugin } from '../inc';
 
@@ -23,6 +25,7 @@ export class AgentClient {
   private storage: ClientConfig['storage'];
   private providerFactory: ProviderFactory;
   private providers: ClientConfig['providers'];
+  private pluginRegistry?: PluginRegistry;
 
   constructor(config: ClientConfig) {
     this.validateConfig(config);
@@ -30,6 +33,7 @@ export class AgentClient {
     this.storage = config.storage;
     this.providers = config.providers;
     this.providerFactory = new ProviderFactory(config.providers);
+    this.pluginRegistry = config.pluginRegistry as PluginRegistry | undefined;
   }
 
   private validateConfig(config: ClientConfig): void {
@@ -58,11 +62,11 @@ export class AgentClient {
     // Auto-instantiate DefaultRAGPlugin if RAG is enabled and no RAG plugin provided
     if (agentConfig.rag?.enabled) {
       const hasRAGPlugin = agentConfig.plugins?.some(p => p.type === 'rag');
-      
+
       if (!hasRAGPlugin) {
         // Determine which API key to use
-        const embeddingProviderApiKey = 
-          agentConfig.rag.embeddingProviderApiKey || 
+        const embeddingProviderApiKey =
+          agentConfig.rag.embeddingProviderApiKey ||
           this.providers.openai?.apiKey;
 
         if (!embeddingProviderApiKey) {
@@ -90,9 +94,39 @@ export class AgentClient {
 
   /**
    * Get an agent by ID
+   *
+   * Plugin loading priority:
+   * 1. Direct plugins array passed to this method
+   * 2. Plugin registry (if configured) - reinstantiates from stored configs
+   * 3. No plugins
+   *
+   * @param agentId - The agent ID to load
+   * @param options - Either Plugin[] for backwards compatibility, or options object
    */
-  async getAgent(agentId: string): Promise<Agent> {
-    const agent = await Agent.load(agentId, this.storage, this.providerFactory);
+  async getAgent(
+    agentId: string,
+    options?: Plugin[] | {
+      /** Direct plugin instances to attach (highest priority) */
+      plugins?: Plugin[];
+      /** Override the client's registry for this call */
+      registry?: PluginRegistry;
+    }
+  ): Promise<Agent> {
+    // Handle legacy signature: getAgent(id, plugins[])
+    if (Array.isArray(options)) {
+      const agent = await Agent.load(agentId, this.storage, this.providerFactory, options);
+      if (!agent) {
+        throw new AgentNotFoundError(agentId);
+      }
+      return agent;
+    }
+
+    // New signature: getAgent(id, { plugins?, registry? })
+    const registry = options?.registry || this.pluginRegistry;
+    const agent = await Agent.load(agentId, this.storage, this.providerFactory, {
+      plugins: options?.plugins,
+      registry,
+    });
 
     if (!agent) {
       throw new AgentNotFoundError(agentId);

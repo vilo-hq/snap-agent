@@ -2,6 +2,7 @@ import { generateText, streamText } from 'ai';
 import type { UserModelMessage, AssistantModelMessage } from 'ai';
 import { ProviderFactory } from '../providers';
 import { PluginManager } from './PluginManager';
+import { PluginRegistry } from './PluginRegistry';
 import {
   AgentConfig,
   AgentData,
@@ -14,6 +15,7 @@ import {
   IngestOptions,
   BulkOperation,
   BulkResult,
+  StoredPluginConfig,
 } from '../types';
 import type {
   URLSource,
@@ -64,34 +66,107 @@ export class Agent {
 
   /**
    * Create a new agent
+   *
+   * If plugins are provided, their configurations will be extracted (if they implement getConfig())
+   * and stored in the database for later reinstantiation.
    */
   static async create(
     config: AgentConfig,
     storage: StorageAdapter,
     providerFactory: ProviderFactory
   ): Promise<Agent> {
-    const agentId = await storage.createAgent(config);
+    // Extract serializable configs from plugins (if they implement getConfig())
+    const pluginConfigs: StoredPluginConfig[] = config.pluginConfigs || [];
+
+    if (config.plugins && config.plugins.length > 0) {
+      for (const plugin of config.plugins) {
+        // Check if plugin implements getConfig() for serialization
+        if ('getConfig' in plugin && typeof plugin.getConfig === 'function') {
+          pluginConfigs.push({
+            type: plugin.type,
+            name: plugin.name,
+            config: plugin.getConfig(),
+            priority: plugin.priority,
+            enabled: true,
+          });
+        }
+      }
+    }
+
+    // Store agent with plugin configs
+    const configWithPluginConfigs = {
+      ...config,
+      pluginConfigs,
+    };
+
+    const agentId = await storage.createAgent(configWithPluginConfigs);
     const data = await storage.getAgent(agentId);
 
     if (!data) {
       throw new AgentNotFoundError(agentId);
     }
 
+    // Preserve runtime plugins from original config
+    data.plugins = config.plugins || [];
+
     return new Agent(data, storage, providerFactory);
   }
 
   /**
    * Load an existing agent by ID
+   *
+   * Plugins can be attached in three ways (in order of priority):
+   * 1. Direct plugins array - runtime plugin instances passed directly
+   * 2. Plugin registry - reinstantiate from stored configs using registered factories
+   * 3. No plugins - agent loads without plugin functionality
+   *
+   * @param agentId - The agent ID to load
+   * @param storage - Storage adapter
+   * @param providerFactory - Provider factory
+   * @param options - Either:
+   *   - Plugin[] array (legacy, for backwards compatibility)
+   *   - Options object with plugins and/or registry
    */
   static async load(
     agentId: string,
     storage: StorageAdapter,
-    providerFactory: ProviderFactory
+    providerFactory: ProviderFactory,
+    options?: Plugin[] | {
+      /** Direct plugin instances to attach */
+      plugins?: Plugin[];
+      /** Registry to reinstantiate plugins from stored configs */
+      registry?: PluginRegistry;
+    }
   ): Promise<Agent | null> {
     const data = await storage.getAgent(agentId);
 
     if (!data) {
       return null;
+    }
+
+    // Handle legacy signature: load(id, storage, factory, plugins[])
+    if (Array.isArray(options)) {
+      data.plugins = options;
+      return new Agent(data, storage, providerFactory);
+    }
+
+    // New signature: load(id, storage, factory, { plugins?, registry? })
+    // Priority 1: Direct plugins passed in options
+    if (options?.plugins && options.plugins.length > 0) {
+      data.plugins = options.plugins;
+    }
+    // Priority 2: Reinstantiate from stored configs using registry
+    else if (options?.registry && data.pluginConfigs && data.pluginConfigs.length > 0) {
+      try {
+        data.plugins = await options.registry.instantiateAll(data.pluginConfigs);
+      } catch (error) {
+        console.error('Failed to reinstantiate plugins from stored configs:', error);
+        throw error;
+      }
+    }
+    // Priority 3: No plugins
+    else {
+      data.plugins = [];
     }
 
     return new Agent(data, storage, providerFactory);
@@ -101,12 +176,23 @@ export class Agent {
    * Update agent properties
    */
   async update(updates: Partial<AgentConfig>): Promise<void> {
+    // Preserve current plugins before storage operation
+    const currentPlugins = this.data.plugins || [];
+
     await this.storage.updateAgent(this.data.id, updates);
 
     // Reload data
     const updatedData = await this.storage.getAgent(this.data.id);
     if (updatedData) {
+      // Restore plugins - they're runtime objects that can't be serialized to storage
+      // If updates include new plugins, use those; otherwise keep current plugins
+      updatedData.plugins = updates.plugins || currentPlugins;
       this.data = updatedData;
+
+      // Rebuild plugin manager if plugins changed
+      if (updates.plugins) {
+        this.pluginManager = new PluginManager(updatedData.plugins);
+      }
     }
   }
 

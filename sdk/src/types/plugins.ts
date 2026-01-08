@@ -10,6 +10,22 @@ export interface BasePlugin {
   name: string;
   type: 'rag' | 'tool' | 'middleware' | 'analytics';
   priority?: number; // Lower = executed first (default: 100)
+
+  /**
+   * Optional: Return serializable configuration for persistence
+   * Used by PluginRegistry to store plugin config in database
+   * Should NOT include sensitive values - use env var references instead
+   *
+   * @example
+   * getConfig() {
+   *   return {
+   *     mongoUri: '${MONGO_URI}',  // Reference to env var
+   *     embeddingModel: 'voyage-3-lite',  // Safe to store
+   *     limit: 10,
+   *   };
+   * }
+   */
+  getConfig?(): Record<string, any>;
 }
 
 // ============================================================================
@@ -464,5 +480,42 @@ export interface AnalyticsPlugin extends BasePlugin {
 // ============================================================================
 
 export type Plugin = RAGPlugin | ToolPlugin | MiddlewarePlugin | AnalyticsPlugin;
+
+// ============================================================================
+// Stored Plugin Configuration (for persistence)
+// ============================================================================
+
+/**
+ * Serializable plugin configuration stored in database
+ * Used to reinstantiate plugins when loading agents
+ */
+export interface StoredPluginConfig {
+  /**
+   * Plugin type (rag, middleware, analytics, tool)
+   */
+  type: Plugin['type'];
+
+  /**
+   * Unique plugin identifier (e.g., "@snap-agent/rag-ecommerce")
+   * Used to look up the factory function in the registry
+   */
+  name: string;
+
+  /**
+   * Serializable configuration for the plugin
+   * Use env var references for sensitive values: "${ENV_VAR_NAME}"
+   */
+  config: Record<string, any>;
+
+  /**
+   * Plugin priority (lower = executed first)
+   */
+  priority?: number;
+
+  /**
+   * Whether this plugin is enabled
+   */
+  enabled?: boolean;
+}
 
 
