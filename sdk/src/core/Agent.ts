@@ -1,5 +1,5 @@
 import { generateText, streamText } from 'ai';
-import type { UserModelMessage, AssistantModelMessage } from 'ai';
+import { UserModelMessage, AssistantModelMessage, Output } from 'ai';
 import { ProviderFactory } from '../providers';
 import { PluginManager } from './PluginManager';
 import { PluginRegistry } from './PluginRegistry';
@@ -223,6 +223,8 @@ export class Agent {
       useRAG?: boolean;
       ragFilters?: Record<string, any>;
       threadId?: string;
+      output?:
+            | { mode: 'json' }                      // Flexible JSON
     }
   ): Promise<{
     text: string;
@@ -270,11 +272,27 @@ export class Agent {
     // Generate response
     const model = await this.providerFactory.getModel(this.data.provider, this.data.model);
 
-    const { text } = await generateText({
-      model,
-      messages: beforeResult.messages,
-      system: systemPrompt,
-    });
+    // Add JSON instruction to system prompt if using JSON output mode
+    if (options?.output?.mode === 'json') {
+      systemPrompt += '\n\nIMPORTANT: Respond with valid JSON only.';
+    }
+
+      // Prepare generation options
+  const generateOptions: any = {
+    model,
+    messages: beforeResult.messages,
+    system: systemPrompt,
+  };
+
+    // Add output schema if provided
+  if (options?.output) {
+    if (options.output.mode === 'json') {
+      // Flexible JSON
+      generateOptions.output = Output.json();
+    }
+  }
+
+    const {text} = await generateText(generateOptions);
 
     // Execute middleware after response
     const afterResult = await this.pluginManager.executeAfterResponse(text, {
