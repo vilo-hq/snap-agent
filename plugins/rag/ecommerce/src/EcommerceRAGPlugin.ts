@@ -66,6 +66,7 @@ export interface EcommerceRAGConfig {
 
   // Tenant/Agent filtering
   tenantId: string;
+  isolationLevel?: 'tenant' | 'agent'; // 'tenant' (default): filter by tenantId only, 'agent': filter by tenantId + agentId
 
   // Attribute extraction
   attributeList?: string[];
@@ -229,6 +230,7 @@ export class EcommerceRAGPlugin implements RAGPlugin {
       language: 'es',
       includeOutOfStock: false,
       priority: 10,
+      isolationLevel: 'tenant',
       ...config,
       cache: {
         embeddings: {
@@ -512,7 +514,7 @@ export class EcommerceRAGPlugin implements RAGPlugin {
 
     // Build filter
     const filter: any = { tenantId: this.config.tenantId };
-    if (options.agentId) {
+    if (this.config.isolationLevel === 'agent' && options.agentId) {
       filter.agentId = options.agentId;
     }
 
@@ -860,7 +862,9 @@ export class EcommerceRAGPlugin implements RAGPlugin {
 
           return {
             tenantId: this.config.tenantId,
-            agentId: options?.agentId,
+            ...(this.config.isolationLevel === 'agent' && options?.agentId 
+              ? { agentId: options.agentId } 
+              : {}),
             sku: doc.id,
             title: metadata.title || doc.content.substring(0, 100),
             description: metadata.description || doc.content,
@@ -890,7 +894,9 @@ export class EcommerceRAGPlugin implements RAGPlugin {
                 filter: {
                   tenantId: this.config.tenantId,
                   sku: doc.sku,
-                  ...(options.agentId ? { agentId: options.agentId } : {})
+                  ...(this.config.isolationLevel === 'agent' && options.agentId 
+                    ? { agentId: options.agentId } 
+                    : {})
                 },
                 replacement: doc,
                 upsert: true,
@@ -905,7 +911,9 @@ export class EcommerceRAGPlugin implements RAGPlugin {
               .find({
                 tenantId: this.config.tenantId,
                 sku: { $in: productDocs.map(d => d.sku) },
-                ...(options.agentId ? { agentId: options.agentId } : {})
+                ...(this.config.isolationLevel === 'agent' && options.agentId 
+                  ? { agentId: options.agentId } 
+                  : {})
               })
               .project({ sku: 1 })
               .toArray();
@@ -926,7 +934,9 @@ export class EcommerceRAGPlugin implements RAGPlugin {
                 filter: {
                   tenantId: this.config.tenantId,
                   sku: doc.sku,
-                  ...(options?.agentId ? { agentId: options.agentId } : {})
+                  ...(this.config.isolationLevel === 'agent' && options?.agentId 
+                    ? { agentId: options.agentId } 
+                    : {})
                 },
                 update: { $set: doc },
                 upsert: true,
@@ -1043,7 +1053,9 @@ export class EcommerceRAGPlugin implements RAGPlugin {
       {
         tenantId: this.config.tenantId,
         sku: id,
-        ...(options?.agentId ? { agentId: options.agentId } : {})
+        ...(this.config.isolationLevel === 'agent' && options?.agentId 
+          ? { agentId: options.agentId } 
+          : {})
       },
       { $set: update }
     );
@@ -1063,7 +1075,9 @@ export class EcommerceRAGPlugin implements RAGPlugin {
     const result = await collection.deleteMany({
       tenantId: this.config.tenantId,
       sku: { $in: skuArray },
-      ...(options?.agentId ? { agentId: options.agentId } : {})
+      ...(this.config.isolationLevel === 'agent' && options?.agentId 
+        ? { agentId: options.agentId } 
+        : {})
     });
 
     return result.deletedCount;
