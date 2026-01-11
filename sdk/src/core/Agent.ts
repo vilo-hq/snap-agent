@@ -1,5 +1,5 @@
-import { generateText, streamText } from 'ai';
-import type { UserModelMessage, AssistantModelMessage } from 'ai';
+import { generateText, streamText, Output } from 'ai';
+import type { UserModelMessage, AssistantModelMessage, Schema } from 'ai';
 import { ProviderFactory } from '../providers';
 import { PluginManager } from './PluginManager';
 import { PluginRegistry } from './PluginRegistry';
@@ -217,15 +217,19 @@ export class Agent {
   /**
    * Generate a text response with optional plugin support
    */
-  async generateResponse(
+  async generateResponse<T = unknown>(
     messages: AIMessage[],
     options?: {
       useRAG?: boolean;
       ragFilters?: Record<string, any>;
       threadId?: string;
+      output?:
+      | { mode: 'json' }                           // Flexible JSON (parsed manually)
+      | { mode: 'object'; schema: Schema<T> }      // Structured object with Zod schema
     }
   ): Promise<{
     text: string;
+    parsed?: T;  // Typed result when using 'object' mode, unknown for 'json' mode
     metadata?: Record<string, any>;
   }> {
     const startTime = Date.now();
@@ -270,11 +274,43 @@ export class Agent {
     // Generate response
     const model = await this.providerFactory.getModel(this.data.provider, this.data.model);
 
-    const { text } = await generateText({
-      model,
-      messages: beforeResult.messages,
-      system: systemPrompt,
-    });
+    let text: string;
+    let parsed: T | undefined;
+
+    if (options?.output?.mode === 'object') {
+      // Structured object output using AI SDK's experimental_output
+      // This validates the response against the schema and provides type safety
+      const result = await generateText({
+        model,
+        messages: beforeResult.messages,
+        system: systemPrompt,
+        experimental_output: Output.object({ schema: options.output.schema }),
+      });
+      text = JSON.stringify(result.experimental_output);
+      parsed = result.experimental_output as T;
+    } else if (options?.output?.mode === 'json') {
+      // Flexible JSON mode - add instruction and parse manually
+      const jsonSystemPrompt = systemPrompt + '\n\n---\nOUTPUT FORMAT: You MUST respond with valid JSON only. No markdown code blocks, no explanations, no additional text - just raw JSON that can be parsed directly.';
+      const result = await generateText({
+        model,
+        messages: beforeResult.messages,
+        system: jsonSystemPrompt,
+      });
+      text = result.text;
+      try {
+        parsed = JSON.parse(text) as T;
+      } catch {
+        // LLM didn't return valid JSON - leave parsed undefined
+      }
+    } else {
+      // Default: plain text mode
+      const result = await generateText({
+        model,
+        messages: beforeResult.messages,
+        system: systemPrompt,
+      });
+      text = result.text;
+    }
 
     // Execute middleware after response
     const afterResult = await this.pluginManager.executeAfterResponse(text, {
@@ -295,6 +331,7 @@ export class Agent {
 
     return {
       text: afterResult.response,
+      ...(parsed !== undefined && { parsed }),
       metadata: {
         ...afterResult.metadata,
         ragMetadata,
