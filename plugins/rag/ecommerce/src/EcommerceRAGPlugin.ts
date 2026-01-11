@@ -66,7 +66,10 @@ export interface EcommerceRAGConfig {
 
   // Tenant/Agent filtering
   tenantId: string;
-  isolationLevel?: 'tenant' | 'agent'; // 'tenant' (default): filter by tenantId only, 'agent': filter by tenantId + agentId
+  // Note: Products can be shared (no agentId) or agent-specific (with agentId)
+  // - Ingest WITHOUT agentId → Product available to ALL agents in tenant
+  // - Ingest WITH agentId → Product only available to that specific agent
+  // - Query WITH agentId → Returns shared products + agent-specific products
 
   // Attribute extraction
   attributeList?: string[];
@@ -230,7 +233,6 @@ export class EcommerceRAGPlugin implements RAGPlugin {
       language: 'es',
       includeOutOfStock: false,
       priority: 10,
-      isolationLevel: 'tenant',
       ...config,
       cache: {
         embeddings: {
@@ -512,10 +514,15 @@ export class EcommerceRAGPlugin implements RAGPlugin {
     const db = await this.ensureConnection();
     const collection: Collection<ProductDoc> = db.collection(this.config.collection);
 
-    // Build filter
+    // Build filter - supports shared products (no agentId) + agent-specific products
     const filter: any = { tenantId: this.config.tenantId };
-    if (this.config.isolationLevel === 'agent' && options.agentId) {
-      filter.agentId = options.agentId;
+    if (options.agentId) {
+      // Return shared products (no agentId) OR products for this specific agent
+      filter.$or = [
+        { agentId: { $exists: false } },
+        { agentId: null },
+        { agentId: options.agentId }
+      ];
     }
 
     // Add hard filters
@@ -862,9 +869,9 @@ export class EcommerceRAGPlugin implements RAGPlugin {
 
           return {
             tenantId: this.config.tenantId,
-            ...(this.config.isolationLevel === 'agent' && options?.agentId 
-              ? { agentId: options.agentId } 
-              : {}),
+            // Only set agentId if explicitly provided (agent-specific product)
+            // Products without agentId are shared across all agents in tenant
+            ...(options?.agentId ? { agentId: options.agentId } : {}),
             sku: doc.id,
             title: metadata.title || doc.content.substring(0, 100),
             description: metadata.description || doc.content,
@@ -894,9 +901,8 @@ export class EcommerceRAGPlugin implements RAGPlugin {
                 filter: {
                   tenantId: this.config.tenantId,
                   sku: doc.sku,
-                  ...(this.config.isolationLevel === 'agent' && options.agentId 
-                    ? { agentId: options.agentId } 
-                    : {})
+                  // Match by agentId if provided (for agent-specific products)
+                  ...(options.agentId ? { agentId: options.agentId } : { agentId: { $exists: false } })
                 },
                 replacement: doc,
                 upsert: true,
@@ -911,9 +917,8 @@ export class EcommerceRAGPlugin implements RAGPlugin {
               .find({
                 tenantId: this.config.tenantId,
                 sku: { $in: productDocs.map(d => d.sku) },
-                ...(this.config.isolationLevel === 'agent' && options.agentId 
-                  ? { agentId: options.agentId } 
-                  : {})
+                // Check for matching products (shared or agent-specific)
+                ...(options.agentId ? { agentId: options.agentId } : { agentId: { $exists: false } })
               })
               .project({ sku: 1 })
               .toArray();
@@ -934,9 +939,8 @@ export class EcommerceRAGPlugin implements RAGPlugin {
                 filter: {
                   tenantId: this.config.tenantId,
                   sku: doc.sku,
-                  ...(this.config.isolationLevel === 'agent' && options?.agentId 
-                    ? { agentId: options.agentId } 
-                    : {})
+                  // Match by agentId if provided (for agent-specific products)
+                  ...(options?.agentId ? { agentId: options.agentId } : { agentId: { $exists: false } })
                 },
                 update: { $set: doc },
                 upsert: true,
@@ -1053,9 +1057,8 @@ export class EcommerceRAGPlugin implements RAGPlugin {
       {
         tenantId: this.config.tenantId,
         sku: id,
-        ...(this.config.isolationLevel === 'agent' && options?.agentId 
-          ? { agentId: options.agentId } 
-          : {})
+        // Match by agentId if provided, otherwise match shared products
+        ...(options?.agentId ? { agentId: options.agentId } : { agentId: { $exists: false } })
       },
       { $set: update }
     );
@@ -1075,9 +1078,8 @@ export class EcommerceRAGPlugin implements RAGPlugin {
     const result = await collection.deleteMany({
       tenantId: this.config.tenantId,
       sku: { $in: skuArray },
-      ...(this.config.isolationLevel === 'agent' && options?.agentId 
-        ? { agentId: options.agentId } 
-        : {})
+      // Match by agentId if provided, otherwise match shared products
+      ...(options?.agentId ? { agentId: options.agentId } : { agentId: { $exists: false } })
     });
 
     return result.deletedCount;
