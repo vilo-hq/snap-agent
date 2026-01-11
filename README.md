@@ -1,7 +1,8 @@
 # SnapAgent
 
 **The extensible, lightweight AI Agent SDK that runs everywhere**
-Build stateful AI agents with multi-provider support. Extensible via plugins. Edge-runtime compatible. TypeScript-first.
+
+Build stateful agents with multi-provider support. Extensible via plugins. Edge-runtime compatible. TypeScript-first.
 
 [![npm version](https://img.shields.io/npm/v/@snap-agent/core.svg)](https://www.npmjs.com/package/@snap-agent/core)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
