@@ -1,6 +1,6 @@
 {
   "name": "@snap-agent/rag-ecommerce",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "E-commerce RAG plugin for SnapAgent SDK - Product search with vector embeddings",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",

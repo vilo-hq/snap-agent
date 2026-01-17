@@ -270,11 +270,11 @@ export class EcommerceRAGPlugin implements RAGPlugin {
   async retrieveContext(
     message: string,
     options: {
-      agentId: string;
+      agentId?: string;
       threadId?: string;
       filters?: Record<string, any>;
       metadata?: Record<string, any>;
-    }
+    } = {}
   ): Promise<RAGContext> {
     // 1. Embed the query
     const queryVector = await this.embedText(message);
@@ -288,7 +288,7 @@ export class EcommerceRAGPlugin implements RAGPlugin {
     // 3. Vector search with hard filters
     const searchResults = await this.vectorSearch({
       queryVector,
-      agentId: options.agentId,
+      ...(options.agentId && { agentId: options.agentId }),
       hardFilters: options.filters || {},
     });
 
@@ -508,7 +508,7 @@ export class EcommerceRAGPlugin implements RAGPlugin {
    */
   private async vectorSearch(options: {
     queryVector: number[];
-    agentId: string;
+    agentId?: string;
     hardFilters: Record<string, any>;
   }): Promise<ProductDoc[]> {
     const db = await this.ensureConnection();
