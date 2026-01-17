@@ -288,7 +288,7 @@ export class EcommerceRAGPlugin implements RAGPlugin {
     // 3. Vector search with hard filters
     const searchResults = await this.vectorSearch({
       queryVector,
-      agentId: options.agentId,
+      ...(options.agentId && { agentId: options.agentId }),
       hardFilters: options.filters || {},
     });
 
