@@ -1,0 +1,68 @@
+{
+  "name": "@snap-agent/rag-cms",
+  "version": "0.1.0",
+  "description": "CMS RAG plugin for SnapAgent SDK - Schema-agnostic content search for Drupal, WordPress, and any CMS",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts --format cjs,esm --dts --clean",
+    "dev": "tsup src/index.ts --format cjs,esm --dts --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "rag",
+    "cms",
+    "drupal",
+    "wordpress",
+    "contentful",
+    "vector-search",
+    "content",
+    "ai",
+    "chatbot"
+  ],
+  "author": "ViloTech",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "peerDependencies": {
+    "@snap-agent/core": "^0.1.0",
+    "mongodb": "^6.0.0"
+  },
+  "dependencies": {
+    "cheerio": "^1.0.0",
+    "openai": "^5.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "dotenv": "^16.4.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vilo-hq/snap-agent.git",
+    "directory": "plugins/rag/cms"
+  },
+  "homepage": "https://github.com/vilo-hq/snap-agent/tree/main/plugins/rag/cms",
+  "bugs": {
+    "url": "https://github.com/vilo-hq/snap-agent/issues"
+  }
+}
+
