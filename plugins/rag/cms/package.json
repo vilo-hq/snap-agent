@@ -1,6 +1,6 @@
 {
   "name": "@snap-agent/rag-cms",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "CMS RAG plugin for SnapAgent SDK - Schema-agnostic content search for Drupal, WordPress, and any CMS",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
