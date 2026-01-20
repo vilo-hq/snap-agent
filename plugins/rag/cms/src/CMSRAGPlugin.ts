@@ -120,13 +120,10 @@ export class CMSRAGPlugin implements RAGPlugin {
       ...options.filters,
     };
 
-    // Flexible agent filtering: shared content (no agentId) + agent-specific
+    // Agent filtering: shared content (agentId: 'shared') + agent-specific
+    // Using $in instead of $or (Atlas Vector Search doesn't support $or)
     if (options.agentId) {
-      hardFilters.$or = [
-        { agentId: { $exists: false } },
-        { agentId: null },
-        { agentId: options.agentId },
-      ];
+      hardFilters.agentId = { $in: ['shared', options.agentId] };
     }
 
     const results = await this.vectorSearch({
@@ -362,7 +359,8 @@ export class CMSRAGPlugin implements RAGPlugin {
           ...doc.metadata,
         },
         tenantId: this.config.tenantId,
-        ...(options?.agentId && { agentId: options.agentId }),
+        // Use 'shared' marker for tenant-wide content, specific agentId for agent-only
+        agentId: options?.agentId || 'shared',
         embedding: embeddings[idx],
       }));
 
@@ -372,14 +370,9 @@ export class CMSRAGPlugin implements RAGPlugin {
           const filter: any = {
             tenantId: this.config.tenantId,
             id: doc.id,
+            // Match by agentId ('shared' for tenant-wide, specific for agent-only)
+            agentId: options?.agentId || 'shared',
           };
-
-          // Match by agentId if provided, otherwise shared content
-          if (options?.agentId) {
-            filter.agentId = options.agentId;
-          } else {
-            filter.agentId = { $exists: false };
-          }
 
           await collection.updateOne(
             filter,
@@ -438,13 +431,9 @@ export class CMSRAGPlugin implements RAGPlugin {
     const filter: any = {
       tenantId: this.config.tenantId,
       id,
+      // Match by agentId ('shared' for tenant-wide, specific for agent-only)
+      agentId: options?.agentId || 'shared',
     };
-
-    if (options?.agentId) {
-      filter.agentId = options.agentId;
-    } else {
-      filter.agentId = { $exists: false };
-    }
 
     await collection.updateOne(filter, { $set: update });
   }
@@ -463,13 +452,9 @@ export class CMSRAGPlugin implements RAGPlugin {
     const filter: any = {
       tenantId: this.config.tenantId,
       id: { $in: idArray },
+      // Match by agentId ('shared' for tenant-wide, specific for agent-only)
+      agentId: options?.agentId || 'shared',
     };
-
-    if (options?.agentId) {
-      filter.agentId = options.agentId;
-    } else {
-      filter.agentId = { $exists: false };
-    }
 
     const result = await collection.deleteMany(filter);
     return result.deletedCount;
