@@ -124,21 +124,35 @@ export class ProviderFactory {
 
 /**
  * Common model names for quick reference
+ * Updated: February 2026
  */
 export const Models = {
   OpenAI: {
+    // GPT-5 series (latest)
+    GPT5: 'gpt-5',
+    GPT5_MINI: 'gpt-5-mini',
+    // GPT-4o series (stable)
     GPT4O: 'gpt-4o',
     GPT4O_MINI: 'gpt-4o-mini',
-    GPT4_TURBO: 'gpt-4-turbo',
-    GPT35_TURBO: 'gpt-3.5-turbo',
+    // Reasoning models
+    O1: 'o1',
+    O1_MINI: 'o1-mini',
   },
   Anthropic: {
-    CLAUDE_35_SONNET: 'claude-3-5-sonnet-20241022',
-    CLAUDE_35_HAIKU: 'claude-3-5-haiku-20241022',
-    CLAUDE_3_OPUS: 'claude-3-opus-20240229',
+    // Claude 4 series (latest)
+    CLAUDE_4_OPUS: 'claude-opus-4-20250514',
+    CLAUDE_4_SONNET: 'claude-sonnet-4-20250514',
+    // Claude 3.7 series
+    CLAUDE_37_SONNET: 'claude-3-7-sonnet-latest',
+    // Claude 3.5 series (stable)
+    CLAUDE_35_SONNET: 'claude-3-5-sonnet-latest',
+    CLAUDE_35_HAIKU: 'claude-3-5-haiku-latest',
   },
   Google: {
-    GEMINI_2_FLASH: 'gemini-2.0-flash-exp',
+    // Gemini 2.0 series (latest)
+    GEMINI_2_FLASH: 'gemini-2.0-flash',
+    GEMINI_2_FLASH_LITE: 'gemini-2.0-flash-lite',
+    // Gemini 1.5 series (stable)
     GEMINI_15_PRO: 'gemini-1.5-pro',
     GEMINI_15_FLASH: 'gemini-1.5-flash',
   },

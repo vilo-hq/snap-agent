@@ -5,8 +5,11 @@
  * - OpenAI (GPT)
  * - Anthropic (Claude)
  * - Google (Gemini)
+ * 
+ * Run: npx tsx examples/multi-provider.ts
  */
 
+import 'dotenv/config';
 import { createClient, MemoryStorage, Models } from '../src';
 
 async function main() {
@@ -32,11 +35,11 @@ async function main() {
   });
   console.log(`Created GPT agent: ${gptAgent.id}`);
 
-  // Create Claude agent
+  // Create Claude agent (using Claude 4 Sonnet)
   const claudeAgent = await client.createAgent({
     name: 'Claude Assistant',
     provider: 'anthropic',
-    model: Models.Anthropic.CLAUDE_35_SONNET,
+    model: Models.Anthropic.CLAUDE_4_SONNET,
     instructions: 'You are Claude. Respond with "I am Claude" in your answer.',
     userId: 'user-123',
   });
@@ -53,42 +56,54 @@ async function main() {
   console.log(`Created Gemini agent: ${geminiAgent.id}\n`);
 
   const question = 'What is your name and what can you do?';
-  
+
   // Chat with GPT
   console.log('[GPT] Asking GPT...');
-  const gptThread = await client.createThread({
-    agentId: gptAgent.id,
-    userId: 'user-123',
-  });
-  const gptResponse = await client.chat({
-    threadId: gptThread.id,
-    message: question,
-  });
-  console.log(`GPT: ${gptResponse.reply.substring(0, 150)}...\n`);
+  try {
+    const gptThread = await client.createThread({
+      agentId: gptAgent.id,
+      userId: 'user-123',
+    });
+    const gptResponse = await client.chat({
+      threadId: gptThread.id,
+      message: question,
+    });
+    console.log(`GPT: ${gptResponse.reply.substring(0, 150)}...\n`);
+  } catch (error: any) {
+    console.log(`GPT Error: ${error.message}\n`);
+  }
 
   // Chat with Claude
   console.log('[Claude] Asking Claude...');
-  const claudeThread = await client.createThread({
-    agentId: claudeAgent.id,
-    userId: 'user-123',
-  });
-  const claudeResponse = await client.chat({
-    threadId: claudeThread.id,
-    message: question,
-  });
-  console.log(`Claude: ${claudeResponse.reply.substring(0, 150)}...\n`);
+  try {
+    const claudeThread = await client.createThread({
+      agentId: claudeAgent.id,
+      userId: 'user-123',
+    });
+    const claudeResponse = await client.chat({
+      threadId: claudeThread.id,
+      message: question,
+    });
+    console.log(`Claude: ${claudeResponse.reply.substring(0, 150)}...\n`);
+  } catch (error: any) {
+    console.log(`Claude Error: ${error.message}\n`);
+  }
 
   // Chat with Gemini
   console.log('[Gemini] Asking Gemini...');
-  const geminiThread = await client.createThread({
-    agentId: geminiAgent.id,
-    userId: 'user-123',
-  });
-  const geminiResponse = await client.chat({
-    threadId: geminiThread.id,
-    message: question,
-  });
-  console.log(`Gemini: ${geminiResponse.reply.substring(0, 150)}...\n`);
+  try {
+    const geminiThread = await client.createThread({
+      agentId: geminiAgent.id,
+      userId: 'user-123',
+    });
+    const geminiResponse = await client.chat({
+      threadId: geminiThread.id,
+      message: question,
+    });
+    console.log(`Gemini: ${geminiResponse.reply.substring(0, 150)}...\n`);
+  } catch (error: any) {
+    console.log(`Gemini Error: ${error.message}\n`);
+  }
 
   // Show configured providers
   console.log('Configured providers:', client.getConfiguredProviders());
