@@ -1,62 +1,77 @@
 /**
  * Example: Vercel Edge Function with SnapAgent SDK
- * 
- * This example shows how to deploy an AI agent to Vercel Edge Functions.
- * 
+ *
+ * This example shows how to deploy an AI agent to Vercel Edge Functions
+ * using the Next.js App Router.
+ *
  * Setup:
- * 1. Create a Next.js or standalone Vercel project
- * 2. npm install @snap-agent/core ai @ai-sdk/openai
- * 3. Add OPENAI_API_KEY to Vercel environment variables
- * 4. Create this file at: app/api/chat/route.ts (App Router)
- *    or: pages/api/chat.ts (Pages Router)
+ * 1. Create a Next.js project: npx create-next-app@latest my-agent-app
+ * 2. cd my-agent-app
+ * 3. npm install @snap-agent/core ai @ai-sdk/openai
+ * 4. Add OPENAI_API_KEY to Vercel environment variables (or .env.local for dev)
+ * 5. Copy this file to: app/api/chat/route.ts
  */
 
-import { createClient, MemoryStorage, Models } from '@snap-agent/core/edge';
+import { createClient, MemoryStorage, Models, Agent } from '@snap-agent/core';
 
-// Enable edge runtime
-export const config = {
-  runtime: 'edge',
+// Mark the route as an Edge Function
+export const runtime = 'edge';
+
+type ChatMessage = { role: 'user' | 'assistant'; content: string };
+
+// In-memory agent cache (persists across requests within the same isolate)
+const agentCache = new Map<string, Agent>();
+
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type',
 };
 
-// Simple agent cache (persists across requests in the same isolate)
-const agentCache = new Map<string, any>();
+function jsonResponse(data: unknown, status = 200): Response {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+  });
+}
 
-export default async function handler(request: Request) {
-  // CORS headers
-  const corsHeaders = {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
-  };
-
-  // Handle CORS preflight
-  if (request.method === 'OPTIONS') {
-    return new Response(null, { headers: corsHeaders });
+async function getOrCreateAgent(
+  client: ReturnType<typeof createClient>,
+  userId: string,
+  instructions: string
+): Promise<Agent> {
+  let agent = agentCache.get(userId);
+  if (!agent) {
+    agent = await client.createAgent({
+      name: 'Vercel Edge Agent',
+      instructions,
+      provider: 'openai',
+      model: Models.OpenAI.GPT4O_MINI,
+      userId,
+    });
+    agentCache.set(userId, agent);
   }
+  return agent;
+}
 
-  // Only allow POST
-  if (request.method !== 'POST') {
-    return new Response(
-      JSON.stringify({ error: 'Method not allowed' }),
-      { status: 405, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
-  }
+// Handle CORS preflight
+export async function OPTIONS() {
+  return new Response(null, { headers: corsHeaders });
+}
 
+export async function POST(request: Request) {
   try {
-    const body = await request.json() as { 
-      message: string; 
+    const body = (await request.json()) as {
+      message: string;
       userId?: string;
+      systemPrompt?: string;
       stream?: boolean;
     };
 
     if (!body.message) {
-      return new Response(
-        JSON.stringify({ error: 'Message is required' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      return jsonResponse({ error: 'Message is required' }, 400);
     }
 
-    // Initialize client
     const client = createClient({
       storage: new MemoryStorage(),
       providers: {
@@ -65,38 +80,41 @@ export default async function handler(request: Request) {
     });
 
     const userId = body.userId || 'vercel-user';
-
-    // Get or create agent
-    let agent = agentCache.get(userId);
-    if (!agent) {
-      agent = await client.createAgent({
-        name: 'Vercel Edge Agent',
-        instructions: `You are a helpful assistant deployed on Vercel Edge.
+    const instructions =
+      body.systemPrompt ||
+      `You are a helpful assistant deployed on Vercel Edge.
 Respond concisely and be helpful.
-Current time: ${new Date().toISOString()}`,
-        provider: 'openai',
-        model: Models.OpenAI.GPT4O_MINI,
-        userId,
-      });
-      agentCache.set(userId, agent);
-    }
+Current time: ${new Date().toISOString()}`;
 
-    // Streaming response
+    const agent = await getOrCreateAgent(client, userId, instructions);
+    const messages: ChatMessage[] = [{ role: 'user', content: body.message }];
+
+    // Streaming response via Server-Sent Events
     if (body.stream) {
       const encoder = new TextEncoder();
+
       const stream = new ReadableStream({
         async start(controller) {
-          try {
-            await agent.chatStream(body.message, {
-              onChunk: (chunk: string) => {
-                controller.enqueue(encoder.encode(`data: ${JSON.stringify({ chunk })}\n\n`));
-              },
-            });
-            controller.enqueue(encoder.encode('data: [DONE]\n\n'));
-            controller.close();
-          } catch (error) {
-            controller.error(error);
-          }
+          await agent.streamResponse(
+            messages,
+            (chunk: string) => {
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ chunk })}\n\n`));
+            },
+            (fullResponse: string, metadata?: Record<string, unknown>) => {
+              controller.enqueue(
+                encoder.encode(
+                  `data: ${JSON.stringify({ done: true, fullResponse, metadata })}\n\n`
+                )
+              );
+              controller.close();
+            },
+            (error: Error) => {
+              controller.enqueue(
+                encoder.encode(`data: ${JSON.stringify({ error: error.message })}\n\n`)
+              );
+              controller.close();
+            }
+          );
         },
       });
 
@@ -111,44 +129,60 @@ Current time: ${new Date().toISOString()}`,
 
     // Non-streaming response
     const startTime = Date.now();
-    const { reply } = await agent.chat(body.message);
+    const result = await agent.generateResponse(messages);
     const latency = Date.now() - startTime;
 
-    return new Response(
-      JSON.stringify({
-        reply,
-        meta: {
-          latency: `${latency}ms`,
-          model: Models.OpenAI.GPT4O_MINI,
-          runtime: 'vercel-edge',
-          region: process.env.VERCEL_REGION || 'unknown',
-        },
-      }),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
-
+    return jsonResponse({
+      reply: result.text,
+      meta: {
+        latency: `${latency}ms`,
+        model: Models.OpenAI.GPT4O_MINI,
+        runtime: 'vercel-edge',
+        region: process.env.VERCEL_REGION || 'unknown',
+      },
+    });
   } catch (error) {
-    console.error('Error:', error);
-    return new Response(
-      JSON.stringify({
+    console.error('Edge function error:', error);
+    return jsonResponse(
+      {
         error: 'Internal server error',
         message: error instanceof Error ? error.message : 'Unknown error',
-      }),
-      { status: 500, headers: { 'Content-Type': 'application/json' } }
+      },
+      500
     );
   }
 }
 
 /**
- * Alternative: Next.js App Router format
- * 
- * // app/api/chat/route.ts
- * import { NextRequest } from 'next/server';
- * 
- * export const runtime = 'edge';
- * 
- * export async function POST(request: NextRequest) {
- *   // Same implementation as above
+ * Usage examples:
+ *
+ * Non-streaming:
+ * curl -X POST https://your-app.vercel.app/api/chat \
+ *   -H "Content-Type: application/json" \
+ *   -d '{"message": "What is the capital of France?"}'
+ *
+ * Streaming:
+ * curl -X POST https://your-app.vercel.app/api/chat \
+ *   -H "Content-Type: application/json" \
+ *   -d '{"message": "Write a haiku about coding", "stream": true}'
+ *
+ * JavaScript client (streaming):
+ * const response = await fetch('/api/chat', {
+ *   method: 'POST',
+ *   headers: { 'Content-Type': 'application/json' },
+ *   body: JSON.stringify({ message: 'Hello!', stream: true }),
+ * });
+ *
+ * const reader = response.body.getReader();
+ * const decoder = new TextDecoder();
+ * while (true) {
+ *   const { done, value } = await reader.read();
+ *   if (done) break;
+ *   const lines = decoder.decode(value).split('\n').filter(l => l.startsWith('data: '));
+ *   for (const line of lines) {
+ *     const data = JSON.parse(line.slice(6));
+ *     if (data.chunk) process.stdout.write(data.chunk);
+ *     if (data.done) console.log('\n--- Complete ---');
+ *   }
  * }
  */
-
