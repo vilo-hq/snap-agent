@@ -1,5 +1,5 @@
 import { AgentClient } from './core/Client';
-import { ClientConfig } from './types';
+import type { ClientConfig } from './types';
 
 // Main Client
 export { AgentClient } from './core/Client';
@@ -83,9 +83,10 @@ export {
   InvalidConfigError,
 } from './types';
 
-// Storage (re-export for convenience, but also available via '@snap-agent/core/storage')
-export { MongoDBStorage, MemoryStorage, UpstashStorage } from './storage';
-export type { MongoDBStorageConfig, UpstashStorageConfig } from './storage';
+// Edge-safe storage — no external dependencies
+// For MongoDB: import { MongoDBStorage } from '@snap-agent/core/storage/mongodb'
+// For Upstash:  import { UpstashStorage } from '@snap-agent/core/storage/upstash'
+export { MemoryStorage } from './storage/MemoryStorage';
 
 // Convenience function to create a client
 export function createClient(config: ClientConfig): AgentClient {
