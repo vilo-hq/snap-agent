@@ -1,4 +1,4 @@
-import { generateText, streamText, Output } from 'ai';
+import { generateText, streamText, Output, stepCountIs } from 'ai';
 import type { UserModelMessage, AssistantModelMessage, Schema } from 'ai';
 import { ProviderFactory } from '../providers';
 import { PluginManager } from './PluginManager';
@@ -223,6 +223,8 @@ export class Agent {
       useRAG?: boolean;
       ragFilters?: Record<string, any>;
       threadId?: string;
+      /** Maximum number of tool-call round-trips before returning. Default: 5 */
+      maxToolSteps?: number;
       output?:
       | { mode: 'json' }                           // Flexible JSON (parsed manually)
       | { mode: 'object'; schema: Schema<T> }      // Structured object with Zod schema
@@ -273,6 +275,12 @@ export class Agent {
 
     // Generate response
     const model = await this.providerFactory.getModel(this.data.provider, this.data.model);
+    const tools = this.pluginManager.getAISDKTools();
+    // When tools are available the model may need multiple steps to resolve
+    // all tool calls before producing a final text answer.
+    const stopWhen = tools
+      ? stepCountIs(options?.maxToolSteps ?? 5)
+      : undefined;
 
     let text: string;
     let parsed: T | undefined;
@@ -284,6 +292,8 @@ export class Agent {
         model,
         messages: beforeResult.messages,
         system: systemPrompt,
+        ...(tools && { tools }),
+        ...(stopWhen && { stopWhen }),
         experimental_output: Output.object({ schema: options.output.schema }),
       });
       text = JSON.stringify(result.experimental_output);
@@ -295,6 +305,8 @@ export class Agent {
         model,
         messages: beforeResult.messages,
         system: jsonSystemPrompt,
+        ...(tools && { tools }),
+        ...(stopWhen && { stopWhen }),
       });
       text = result.text;
       try {
@@ -308,6 +320,8 @@ export class Agent {
         model,
         messages: beforeResult.messages,
         system: systemPrompt,
+        ...(tools && { tools }),
+        ...(stopWhen && { stopWhen }),
       });
       text = result.text;
     }
@@ -352,6 +366,8 @@ export class Agent {
       useRAG?: boolean;
       ragFilters?: Record<string, any>;
       threadId?: string;
+      /** Maximum number of tool-call round-trips before returning. Default: 5 */
+      maxToolSteps?: number;
     }
   ): Promise<void> {
     try {
@@ -396,11 +412,17 @@ export class Agent {
 
       // Stream response
       const model = await this.providerFactory.getModel(this.data.provider, this.data.model);
+      const tools = this.pluginManager.getAISDKTools();
+      const stopWhen = tools
+        ? stepCountIs(options?.maxToolSteps ?? 5)
+        : undefined;
 
       const { textStream } = streamText({
         model,
         messages: beforeResult.messages,
         system: systemPrompt,
+        ...(tools && { tools }),
+        ...(stopWhen && { stopWhen }),
       });
 
       let fullText = '';

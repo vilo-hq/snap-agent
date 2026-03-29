@@ -1,3 +1,4 @@
+import type { ToolSet } from 'ai';
 import type {
   Plugin,
   RAGPlugin,
@@ -5,6 +6,7 @@ import type {
   MiddlewarePlugin,
   AnalyticsPlugin,
 } from '../types/plugins';
+import { convertToolPlugins } from './toolUtils';
 
 /**
  * Plugin Manager
@@ -32,6 +34,17 @@ export class PluginManager {
 
   getToolPlugins(): ToolPlugin[] {
     return this.plugins.filter((p) => p.type === 'tool') as ToolPlugin[];
+  }
+
+  /**
+   * Convert all tool plugins into an AI SDK ToolSet ready for generateText/streamText.
+   * Returns undefined when no tool plugins are registered (so the LLM call
+   * omits the tools parameter entirely).
+   */
+  getAISDKTools(): ToolSet | undefined {
+    const toolPlugins = this.getToolPlugins();
+    if (toolPlugins.length === 0) return undefined;
+    return convertToolPlugins(toolPlugins);
   }
 
   getMiddlewarePlugins(): MiddlewarePlugin[] {
