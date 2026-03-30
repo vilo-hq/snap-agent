@@ -18,6 +18,9 @@ export {
 } from './core/PluginRegistry';
 export type { PluginFactory } from './core/PluginRegistry';
 
+// Tool utilities
+export { convertTool, convertToolPlugins } from './core/toolUtils';
+
 // Providers
 export { ProviderFactory, Models } from './providers';
 
