@@ -73,7 +73,10 @@
     "edge",
     "cloudflare-workers",
     "vercel-edge",
-    "serverless"
+    "serverless",
+    "huggingface",
+    "llama",
+    "open-source"
   ],
   "author": "ViloTech",
   "license": "MIT",
@@ -89,6 +92,9 @@
     "@ai-sdk/google": {
       "optional": true
     },
+    "@ai-sdk/huggingface": {
+      "optional": true
+    },
     "mongodb": {
       "optional": true
     },
@@ -99,6 +105,7 @@
   "devDependencies": {
     "@ai-sdk/anthropic": "^2.0.0 || ^3.0.0",
     "@ai-sdk/google": "^2.0.0 || ^3.0.0",
+    "@ai-sdk/huggingface": "^1.0.0",
     "@types/node": "^24.0.0",
     "dotenv": "^17.2.3",
     "eslint": "^8.0.0",

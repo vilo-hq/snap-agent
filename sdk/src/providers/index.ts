@@ -4,7 +4,7 @@ import { ProviderType, ProviderConfig, ProviderNotFoundError } from '../types';
 
 /**
  * Provider factory for creating language model instances
- * Supports OpenAI, Anthropic, and Google providers via Vercel AI SDK
+ * Supports OpenAI, Anthropic, Google, and Hugging Face providers via Vercel AI SDK
  */
 export class ProviderFactory {
   private config: ProviderConfig;
@@ -77,6 +77,26 @@ export class ProviderFactory {
         break;
       }
 
+      case 'huggingface': {
+        if (!this.config.huggingface?.apiKey) {
+          throw new ProviderNotFoundError('Hugging Face API key not configured');
+        }
+        // Dynamic import for edge runtime compatibility
+        try {
+          const { createHuggingFace } = await import('@ai-sdk/huggingface');
+          const huggingface = createHuggingFace({
+            apiKey: this.config.huggingface.apiKey,
+          });
+          model = huggingface(modelName);
+        } catch (error) {
+          throw new ProviderNotFoundError(
+            'Hugging Face provider not installed. Run: npm install @ai-sdk/huggingface'
+          );
+        }
+        break;
+      }
+
+
       default:
         throw new ProviderNotFoundError(`Unknown provider: ${provider}`);
     }
@@ -96,6 +116,8 @@ export class ProviderFactory {
         return !!this.config.anthropic?.apiKey;
       case 'google':
         return !!this.config.google?.apiKey;
+      case 'huggingface':
+        return !!this.config.huggingface?.apiKey;
       default:
         return false;
     }
@@ -110,6 +132,7 @@ export class ProviderFactory {
     if (this.config.openai?.apiKey) providers.push('openai');
     if (this.config.anthropic?.apiKey) providers.push('anthropic');
     if (this.config.google?.apiKey) providers.push('google');
+    if (this.config.huggingface?.apiKey) providers.push('huggingface');
 
     return providers;
   }
@@ -156,5 +179,12 @@ export const Models = {
     GEMINI_15_PRO: 'gemini-1.5-pro',
     GEMINI_15_FLASH: 'gemini-1.5-flash',
   },
+  HuggingFace: {
+    META_LLAMA_70B: 'meta-llama/Llama-3.3-70B-Instruct',
+    META_LLAMA_8B:  'meta-llama/Meta-Llama-3.1-8B-Instruct',
+    MISTRAL_NEMO:   'mistralai/Mistral-Nemo-Instruct-2407',
+    QWEN_72B:       'Qwen/Qwen2.5-72B-Instruct',
+    PHI_4:          'microsoft/phi-4',
+}
 } as const;
 
