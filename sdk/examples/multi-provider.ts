@@ -5,6 +5,7 @@
  * - OpenAI (GPT)
  * - Anthropic (Claude)
  * - Google (Gemini)
+ * - Hugging Face (LLaMA)
  * 
  * Run: npx tsx examples/multi-provider.ts
  */
@@ -20,6 +21,7 @@ async function main() {
       openai: { apiKey: process.env.OPENAI_API_KEY! },
       anthropic: { apiKey: process.env.ANTHROPIC_API_KEY! },
       google: { apiKey: process.env.GOOGLE_API_KEY! },
+      huggingface: { apiKey: process.env.HUGGINGFACE_API_KEY! },
     },
   });
 
@@ -54,6 +56,16 @@ async function main() {
     userId: 'user-123',
   });
   console.log(`Created Gemini agent: ${geminiAgent.id}\n`);
+
+    // Create Llama agent (Hugging Face)
+  const llamaAgent = await client.createAgent({
+      name: 'Llama Assistant',
+      provider: 'huggingface',
+      model: Models.HuggingFace.META_LLAMA_70B,
+      instructions: 'You are Llama. Respond with "I am Llama" in your answer.',
+      userId: 'user-123',
+    });
+  console.log(`Created Llama agent: ${llamaAgent.id}\n`);
 
   const question = 'What is your name and what can you do?';
 
@@ -103,6 +115,22 @@ async function main() {
     console.log(`Gemini: ${geminiResponse.reply.substring(0, 150)}...\n`);
   } catch (error: any) {
     console.log(`Gemini Error: ${error.message}\n`);
+  }
+
+  // Chat with Llama
+  console.log('[Llama] Asking Llama...');
+  try {
+    const llamaThread = await client.createThread({
+      agentId: llamaAgent.id,
+      userId: 'user-123',
+    });
+    const llamaResponse = await client.chat({
+      threadId: llamaThread.id,
+      message: question,
+    });
+    console.log(`Llama: ${llamaResponse.reply.substring(0, 150)}...\n`);
+  } catch (error: any) {
+    console.log(`Llama Error: ${error.message}\n`);
   }
 
   // Show configured providers

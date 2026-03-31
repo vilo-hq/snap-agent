@@ -4,7 +4,7 @@ import type { Plugin, StoredPluginConfig } from './plugins';
 // Provider Types
 // ============================================================================
 
-export type ProviderType = 'openai' | 'anthropic' | 'google';
+export type ProviderType = 'openai' | 'anthropic' | 'google' | 'huggingface';
 
 export interface ProviderConfig {
   openai?: {
@@ -16,6 +16,9 @@ export interface ProviderConfig {
   google?: {
     apiKey: string;
   };
+  huggingface?: { 
+    apiKey: string 
+  }
 }
 
 // ============================================================================

@@ -100,6 +100,7 @@ describe('AgentClient', () => {
           openai: { apiKey: 'openai-key' },
           anthropic: { apiKey: 'anthropic-key' },
           google: { apiKey: 'google-key' },
+          huggingface: { apiKey: 'hf-key' },
         },
       });
       expect(multiProviderClient).toBeInstanceOf(AgentClient);
@@ -805,6 +806,7 @@ describe('AgentClient', () => {
         providers: {
           openai: { apiKey: 'key1' },
           anthropic: { apiKey: 'key2' },
+          huggingface: { apiKey: 'key3' },
         },
       });
 
@@ -812,6 +814,7 @@ describe('AgentClient', () => {
 
       expect(providers).toContain('openai');
       expect(providers).toContain('anthropic');
+      expect(providers).toContain('huggingface');
     });
   });
 
@@ -822,6 +825,18 @@ describe('AgentClient', () => {
 
     it('should return false for unconfigured provider', () => {
       expect(client.isProviderConfigured('anthropic')).toBe(false);
+    });
+
+    it('should return true for huggingface when configured', () => {
+      const hfClient = new AgentClient({
+        storage,
+        providers: { huggingface: { apiKey: 'hf-test-key' } },
+      });
+      expect(hfClient.isProviderConfigured('huggingface')).toBe(true);
+    });
+
+    it('should return false for huggingface when not configured', () => {
+      expect(client.isProviderConfigured('huggingface')).toBe(false);
     });
   });
 });
