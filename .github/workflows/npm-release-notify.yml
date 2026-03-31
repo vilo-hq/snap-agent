@@ -1,0 +1,55 @@
+name: NPM Release Notifier
+
+on:
+  schedule:
+    - cron: '*/15 * * * *' # Check every 15 minutes
+  workflow_dispatch:
+
+jobs:
+  check-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check latest npm version
+        id: npm
+        run: |
+          LATEST=$(npm view @snap-agent/core version 2>/dev/null || echo "")
+          echo "version=$LATEST" >> "$GITHUB_OUTPUT"
+
+      - name: Read last notified version
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: .npm-version-cache
+          key: npm-version-${{ steps.npm.outputs.version }}
+          restore-keys: npm-version-
+
+      - name: Compare versions
+        id: compare
+        run: |
+          LATEST="${{ steps.npm.outputs.version }}"
+          CACHED=""
+          if [ -f .npm-version-cache/version.txt ]; then
+            CACHED=$(cat .npm-version-cache/version.txt)
+          fi
+          if [ -z "$LATEST" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          elif [ "$LATEST" = "$CACHED" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Notify Discord
+        if: steps.compare.outputs.skip == 'false'
+        env:
+          VERSION: ${{ steps.npm.outputs.version }}
+        run: |
+          curl -s -H "Content-Type: application/json" \
+            -d "{\"embeds\":[{\"title\":\"📦 @snap-agent/core v${VERSION} published\",\"url\":\"https://www.npmjs.com/package/@snap-agent/core/v/${VERSION}\",\"color\":3066993,\"fields\":[{\"name\":\"Package\",\"value\":\"@snap-agent/core\",\"inline\":true},{\"name\":\"Version\",\"value\":\"v${VERSION}\",\"inline\":true}]}]}" \
+            "${{ secrets.DISCORD_WEBHOOK }}"
+
+      - name: Save version to cache
+        if: steps.compare.outputs.skip == 'false'
+        run: |
+          mkdir -p .npm-version-cache
+          echo "${{ steps.npm.outputs.version }}" > .npm-version-cache/version.txt
