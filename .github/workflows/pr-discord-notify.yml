@@ -1,0 +1,27 @@
+name: PR Discord Notifier
+
+on:
+  pull_request:
+    types: [opened, closed]
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notify PR opened
+        if: github.event.action == 'opened'
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: |
+          curl -s -H "Content-Type: application/json" \
+            -d "{\"embeds\":[{\"title\":\"🔀 New PR: ${{ github.event.pull_request.title }}\",\"url\":\"${{ github.event.pull_request.html_url }}\",\"color\":5793266,\"fields\":[{\"name\":\"Author\",\"value\":\"${{ github.event.pull_request.user.login }}\",\"inline\":true},{\"name\":\"Branch\",\"value\":\"${{ github.event.pull_request.head.ref }}\",\"inline\":true}],\"description\":\"${{ github.event.pull_request.body }}\"}]}" \
+            "$DISCORD_WEBHOOK"
+
+      - name: Notify PR merged
+        if: github.event.action == 'closed' && github.event.pull_request.merged == true
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: |
+          curl -s -H "Content-Type: application/json" \
+            -d "{\"embeds\":[{\"title\":\"✅ PR Merged: ${{ github.event.pull_request.title }}\",\"url\":\"${{ github.event.pull_request.html_url }}\",\"color\":3066993,\"fields\":[{\"name\":\"Author\",\"value\":\"${{ github.event.pull_request.user.login }}\",\"inline\":true},{\"name\":\"Merged by\",\"value\":\"${{ github.event.sender.login }}\",\"inline\":true}]}]}" \
+            "$DISCORD_WEBHOOK"
