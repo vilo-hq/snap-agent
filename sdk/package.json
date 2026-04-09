@@ -116,7 +116,7 @@
     "vitest": "^1.0.0"
   },
   "dependencies": {
-    "zod": "^3.25.76"
+    "zod": "3"
   },
   "publishConfig": {
     "access": "public"
