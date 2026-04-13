@@ -9,6 +9,8 @@ import {
   ChatRequest,
   ChatResponse,
   StreamCallbacks,
+  RunRequest,
+  RunResponse,
   AgentData,
   ThreadData,
   InvalidConfigError,
@@ -277,6 +279,124 @@ export class AgentClient {
       callbacks.onError(
         error instanceof Error ? error : new Error('Unknown error')
       );
+    }
+  }
+
+  // ============================================================================
+  // Headless / Backend Execution
+  // ============================================================================
+
+  /**
+   * Run an agent in headless mode — stateless, one-shot execution.
+   * No thread or message history. Designed for backend automation:
+   * webhooks, cron jobs, data pipelines, and event-driven workflows.
+   *
+   * @example
+   * // Simple run
+   * const result = await client.run({
+   *   agentId: 'agent-123',
+   *   input: 'Summarize this document',
+   *   payload: { document: '...' },
+   * });
+   *
+   * @example
+   * // With webhook delivery
+   * const result = await client.run({
+   *   agentId: 'agent-123',
+   *   input: 'Process this order',
+   *   payload: { orderId: '456', items: [...] },
+   *   webhook: {
+   *     url: 'https://example.com/hooks/agent-result',
+   *     secret: 'whsec_...',
+   *   },
+   * });
+   */
+  async run(request: RunRequest): Promise<RunResponse> {
+    const agent = await this.getAgent(request.agentId);
+
+    // Build the user message: input + optional serialized payload
+    let messageContent = request.input;
+    if (request.payload) {
+      messageContent += `\n\n---\nPayload:\n${JSON.stringify(request.payload, null, 2)}`;
+    }
+
+    const messages: Array<{ role: 'user'; content: string }> = [
+      { role: 'user', content: messageContent },
+    ];
+
+    // Execute agent (reuses full plugin pipeline: middleware, RAG, tools, analytics)
+    const result = await agent.generateResponse(messages, {
+      useRAG: request.useRAG,
+      ragFilters: request.ragFilters,
+      maxToolSteps: request.maxToolSteps,
+    });
+
+    const response: RunResponse = {
+      output: result.text,
+      parsed: result.parsed,
+      metadata: result.metadata,
+    };
+
+    // Deliver via webhook if configured
+    if (request.webhook) {
+      response.webhookDelivery = await this.deliverWebhook(request.webhook, response);
+    }
+
+    return response;
+  }
+
+  /**
+   * Deliver a run response to a webhook URL
+   */
+  private async deliverWebhook(
+    webhook: RunRequest['webhook'] & {},
+    response: Omit<RunResponse, 'webhookDelivery'>
+  ): Promise<NonNullable<RunResponse['webhookDelivery']>> {
+    try {
+      const body = JSON.stringify({
+        output: response.output,
+        parsed: response.parsed,
+        metadata: response.metadata,
+        timestamp: new Date().toISOString(),
+      });
+
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        ...webhook.headers,
+      };
+
+      // HMAC-SHA256 signature if secret is provided
+      if (webhook.secret) {
+        const encoder = new TextEncoder();
+        const key = await crypto.subtle.importKey(
+          'raw',
+          encoder.encode(webhook.secret),
+          { name: 'HMAC', hash: 'SHA-256' },
+          false,
+          ['sign']
+        );
+        const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(body));
+        const hex = Array.from(new Uint8Array(signature))
+          .map((b) => b.toString(16).padStart(2, '0'))
+          .join('');
+        headers['X-Signature-256'] = `sha256=${hex}`;
+      }
+
+      const res = await fetch(webhook.url, {
+        method: 'POST',
+        headers,
+        body,
+      });
+
+      return {
+        success: res.ok,
+        statusCode: res.status,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Webhook delivery failed',
+      };
     }
   }
 

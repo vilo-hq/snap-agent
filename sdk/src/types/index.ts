@@ -156,6 +156,61 @@ export interface ChatResponse {
   };
 }
 
+// ============================================================================
+// Run Types (Headless / Backend mode)
+// ============================================================================
+
+/**
+ * Webhook delivery configuration for headless agent runs
+ */
+export interface WebhookConfig {
+  /** URL to POST results to */
+  url: string;
+  /** Additional headers to include in the webhook request */
+  headers?: Record<string, string>;
+  /** Secret for HMAC-SHA256 signature (sent as X-Signature-256 header) */
+  secret?: string;
+}
+
+/**
+ * Request to run an agent in headless mode (no thread, no message history)
+ * Designed for backend/automation use cases: webhooks, cron jobs, pipelines
+ */
+export interface RunRequest {
+  /** Agent ID to execute */
+  agentId: string;
+  /** Text instruction for the agent */
+  input: string;
+  /** Optional structured payload — serialized and appended to the input as context */
+  payload?: Record<string, any>;
+  /** Enable RAG plugins */
+  useRAG?: boolean;
+  /** Filters for RAG plugins */
+  ragFilters?: Record<string, any>;
+  /** Maximum number of tool-call round-trips (default: 5) */
+  maxToolSteps?: number;
+  /** Optional: deliver the result to a webhook URL */
+  webhook?: WebhookConfig;
+}
+
+/**
+ * Result of a headless agent run
+ */
+export interface RunResponse {
+  /** Agent's text output */
+  output: string;
+  /** Parsed output (when agent uses JSON/object output mode) */
+  parsed?: unknown;
+  /** Plugin metadata (RAG sources, latency, etc.) */
+  metadata?: Record<string, any>;
+  /** Webhook delivery result (only present when webhook was configured) */
+  webhookDelivery?: {
+    success: boolean;
+    statusCode?: number;
+    error?: string;
+  };
+}
+
 export interface StreamCallbacks {
   onChunk: (chunk: string) => void;
   onComplete: (fullResponse: string, metadata?: Record<string, any>) => void;

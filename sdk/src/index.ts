@@ -43,6 +43,10 @@ export type {
   ChatRequest,
   ChatResponse,
   StreamCallbacks,
+  // Headless / Backend types
+  RunRequest,
+  RunResponse,
+  WebhookConfig,
   StorageAdapter,
   ClientConfig,
   RAGConfig,

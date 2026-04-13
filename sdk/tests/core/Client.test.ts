@@ -839,5 +839,211 @@ describe('AgentClient', () => {
       expect(client.isProviderConfigured('huggingface')).toBe(false);
     });
   });
+
+  // ============================================================================
+  // Headless / Backend Execution (run)
+  // ============================================================================
+
+  describe('run', () => {
+    const mockAgent = {
+      id: 'agent-1',
+      generateResponse: vi.fn().mockResolvedValue({
+        text: 'Processed successfully',
+        metadata: { latency: 50 },
+      }),
+    };
+
+    beforeEach(() => {
+      (Agent.load as Mock).mockResolvedValue(mockAgent);
+      mockAgent.generateResponse.mockClear();
+    });
+
+    it('should execute agent with input and return output', async () => {
+      const result = await client.run({
+        agentId: 'agent-1',
+        input: 'Process this order',
+      });
+
+      expect(result.output).toBe('Processed successfully');
+      expect(result.metadata).toEqual({ latency: 50 });
+    });
+
+    it('should pass input as a user message to generateResponse', async () => {
+      await client.run({
+        agentId: 'agent-1',
+        input: 'Summarize this document',
+      });
+
+      expect(mockAgent.generateResponse).toHaveBeenCalledWith(
+        [{ role: 'user', content: 'Summarize this document' }],
+        expect.objectContaining({})
+      );
+    });
+
+    it('should append serialized payload to the input', async () => {
+      await client.run({
+        agentId: 'agent-1',
+        input: 'Process this',
+        payload: { orderId: '123', amount: 99.99 },
+      });
+
+      const calledMessages = mockAgent.generateResponse.mock.calls[0][0];
+      expect(calledMessages[0].content).toContain('Process this');
+      expect(calledMessages[0].content).toContain('"orderId": "123"');
+      expect(calledMessages[0].content).toContain('"amount": 99.99');
+    });
+
+    it('should forward useRAG and ragFilters options', async () => {
+      await client.run({
+        agentId: 'agent-1',
+        input: 'Find related docs',
+        useRAG: true,
+        ragFilters: { category: 'support' },
+      });
+
+      expect(mockAgent.generateResponse).toHaveBeenCalledWith(
+        expect.any(Array),
+        expect.objectContaining({
+          useRAG: true,
+          ragFilters: { category: 'support' },
+        })
+      );
+    });
+
+    it('should forward maxToolSteps option', async () => {
+      await client.run({
+        agentId: 'agent-1',
+        input: 'Do something',
+        maxToolSteps: 10,
+      });
+
+      expect(mockAgent.generateResponse).toHaveBeenCalledWith(
+        expect.any(Array),
+        expect.objectContaining({
+          maxToolSteps: 10,
+        })
+      );
+    });
+
+    it('should not include webhookDelivery when no webhook is configured', async () => {
+      const result = await client.run({
+        agentId: 'agent-1',
+        input: 'Test',
+      });
+
+      expect(result.webhookDelivery).toBeUndefined();
+    });
+
+    it('should deliver result to webhook and include delivery status', async () => {
+      // Mock fetch for webhook delivery
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+      }) as any;
+
+      try {
+        const result = await client.run({
+          agentId: 'agent-1',
+          input: 'Process this',
+          webhook: {
+            url: 'https://example.com/hook',
+          },
+        });
+
+        expect(result.webhookDelivery).toEqual({
+          success: true,
+          statusCode: 200,
+        });
+
+        expect(globalThis.fetch).toHaveBeenCalledWith(
+          'https://example.com/hook',
+          expect.objectContaining({
+            method: 'POST',
+            headers: expect.objectContaining({ 'Content-Type': 'application/json' }),
+          })
+        );
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
+    it('should include custom headers in webhook request', async () => {
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = vi.fn().mockResolvedValue({ ok: true, status: 200 }) as any;
+
+      try {
+        await client.run({
+          agentId: 'agent-1',
+          input: 'Test',
+          webhook: {
+            url: 'https://example.com/hook',
+            headers: { 'X-Custom': 'value' },
+          },
+        });
+
+        expect(globalThis.fetch).toHaveBeenCalledWith(
+          'https://example.com/hook',
+          expect.objectContaining({
+            headers: expect.objectContaining({ 'X-Custom': 'value' }),
+          })
+        );
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
+    it('should handle webhook delivery failure gracefully', async () => {
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = vi.fn().mockRejectedValue(new Error('Network error')) as any;
+
+      try {
+        const result = await client.run({
+          agentId: 'agent-1',
+          input: 'Test',
+          webhook: { url: 'https://example.com/hook' },
+        });
+
+        expect(result.webhookDelivery).toEqual({
+          success: false,
+          error: 'Network error',
+        });
+        // The run itself should still succeed
+        expect(result.output).toBe('Processed successfully');
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
+    it('should throw AgentNotFoundError for non-existent agent', async () => {
+      (Agent.load as Mock).mockResolvedValue(null);
+
+      await expect(
+        client.run({ agentId: 'non-existent', input: 'Test' })
+      ).rejects.toThrow(AgentNotFoundError);
+    });
+
+    it('should include HMAC signature when webhook secret is provided', async () => {
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = vi.fn().mockResolvedValue({ ok: true, status: 200 }) as any;
+
+      try {
+        await client.run({
+          agentId: 'agent-1',
+          input: 'Test',
+          webhook: {
+            url: 'https://example.com/hook',
+            secret: 'test-secret',
+          },
+        });
+
+        const fetchCall = (globalThis.fetch as Mock).mock.calls[0];
+        const headers = fetchCall[1].headers;
+        expect(headers['X-Signature-256']).toMatch(/^sha256=[a-f0-9]{64}$/);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+  });
 });
 
