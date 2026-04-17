@@ -1,46 +1,46 @@
 # MongoDB Atlas Vector Search - Troubleshooting
 
-## Problemas Comunes y Soluciones
+## Common Problems and Solutions
 
-### 1. "Index not found" o "No results found"
+### 1. "Index not found" or "No results found"
 
-**Síntomas:**
-- `retrieveContext()` retorna 0 resultados
+**Symptoms:**
+- `retrieveContext()` returns 0 results
 - Error: `index "docs_vector_index" not found`
 
-**Causas y Soluciones:**
+**Causes and Solutions:**
 
-#### A. El índice no existe
+#### A. The index does not exist
 ```bash
-# Verificar con el script
+# Verify with the script
 pnpm verify-index
 ```
 
-**Solución:** Crear el índice siguiendo los pasos del README.
+**Solution:** Create the index following the steps in the README.
 
-#### B. El índice está en status "Building"
-- Ve a Atlas UI → Atlas Search
-- Verifica que el status sea **"Active"** (no "Building" o "Initial Sync")
-- Espera 2-5 minutos hasta que se complete
+#### B. The index status is "Building"
+- Go to Atlas UI → Atlas Search
+- Verify that the status is **"Active"** (not "Building" or "Initial Sync")
+- Wait 2-5 minutes until it completes
 
-#### C. Nombre de índice incorrecto
+#### C. Incorrect index name
 ```typescript
-// Verifica que coincida con el nombre en Atlas
+// Verify it matches the name in Atlas
 const plugin = new DocsRAGPlugin({
-  vectorIndexName: 'docs_vector_index', // ⚠️ Debe coincidir exactamente
+  vectorIndexName: 'docs_vector_index', // ⚠️ Must match exactly
   // ...
 });
 ```
 
-#### D. No hay documentos ingeridos
+#### D. No documents ingested
 ```typescript
-// Primero ingiere documentos
+// First ingest documents
 await plugin.ingest([docs], { agentId: 'test-agent' });
 
-// Luego espera unos segundos para indexación
+// Then wait a few seconds for indexing
 await new Promise(r => setTimeout(r, 2000));
 
-// Ahora busca
+// Now search
 await plugin.retrieveContext(query, { agentId: 'test-agent' });
 ```
 
@@ -53,24 +53,24 @@ await plugin.retrieveContext(query, { agentId: 'test-agent' });
 Vector search error: embedding dimension mismatch
 ```
 
-**Causa:** Las dimensiones del embedding no coinciden con el índice.
+**Cause:** The embedding dimensions do not match the index.
 
-**Solución:**
+**Solution:**
 
-| Modelo | Dimensiones |
-|--------|-------------|
+| Model | Dimensions |
+|-------|------------|
 | `text-embedding-3-small` | 1536 |
 | `text-embedding-3-large` | 3072 |
 | `text-embedding-ada-002` | 1536 |
 | `voyage-3-lite` | 1024 |
 | `voyage-3` | 1024 |
 
-Actualiza el índice en Atlas:
+Update the index in Atlas:
 ```json
 {
   "type": "vector",
   "path": "embedding",
-  "numDimensions": 1536,  // ⚠️ Cambiar según tu modelo
+  "numDimensions": 1536,  // ⚠️ Change according to your model
   "similarity": "cosine"
 }
 ```
@@ -84,49 +84,49 @@ Actualiza el índice en Atlas:
 Vector Search is not available on free tier (M0/M2/M5)
 ```
 
-**Causa:** Vector Search requiere Atlas M10 o superior.
+**Cause:** Vector Search requires Atlas M10 or higher.
 
-**Solución:**
-1. Upgradea tu cluster a **M10** o superior
-2. En Atlas: Cluster → Edit Configuration → General → Cluster Tier → M10
+**Solution:**
+1. Upgrade your cluster to **M10** or higher
+2. In Atlas: Cluster → Edit Configuration → General → Cluster Tier → M10
 
-**Costos aproximados (US East):**
-- M10: ~$0.08/hora (~$57/mes)
-- M20: ~$0.20/hora (~$144/mes)
+**Approximate costs (US East):**
+- M10: ~$0.08/hour (~$57/month)
+- M20: ~$0.20/hour (~$144/month)
 
-**Alternativa para desarrollo:**
-- Usar el free trial de Atlas (créditos gratis)
-- Shared M10+ durante desarrollo, downgrade después
+**Development alternative:**
+- Use the Atlas free trial (free credits)
+- Shared M10+ during development, downgrade afterwards
 
 ---
 
-### 4. "Connection timeout" o "Network error"
+### 4. "Connection timeout" or "Network error"
 
-**Síntomas:**
+**Symptoms:**
 - `MongoServerError: connection timeout`
-- `ECONNREFUSED` o `ETIMEDOUT`
+- `ECONNREFUSED` or `ETIMEDOUT`
 
-**Soluciones:**
+**Solutions:**
 
 #### A. Whitelist IP
-1. Ve a Atlas → Network Access → IP Access List
+1. Go to Atlas → Network Access → IP Access List
 2. Click "Add IP Address"
-3. Opciones:
+3. Options:
    - Development: "Allow Access from Anywhere" (0.0.0.0/0)
-   - Production: Solo tu IP específica
+   - Production: Your specific IP only
 
-#### B. Connection String incorrecto
+#### B. Incorrect Connection String
 ```typescript
-// ✅ Correcto (con credenciales y database)
+// ✅ Correct (with credentials and database)
 mongodb+srv://username:password@cluster.mongodb.net/mydb?retryWrites=true&w=majority
 
-// ❌ Incorrecto
-mongodb://localhost:27017 // No funciona con Atlas
+// ❌ Incorrect
+mongodb://localhost:27017 // Does not work with Atlas
 ```
 
-#### C. Firewall corporativo
-- Verifica que el puerto 27017 esté abierto
-- Prueba con VPN o red diferente
+#### C. Corporate firewall
+- Verify that port 27017 is open
+- Try with a VPN or different network
 
 ---
 
@@ -137,30 +137,30 @@ mongodb://localhost:27017 // No funciona con Atlas
 OpenAI API error: 429 - Rate limit exceeded
 ```
 
-**Solución:**
+**Solution:**
 
-#### A. Habilita el cache
+#### A. Enable caching
 ```typescript
 const plugin = new DocsRAGPlugin({
   cache: {
     embeddings: {
-      enabled: true,      // ✅ Reducir llamadas a API
-      ttl: 3600000,       // 1 hora
+      enabled: true,      // ✅ Reduce API calls
+      ttl: 3600000,       // 1 hour
       maxSize: 1000,
     },
   },
 });
 ```
 
-#### B. Batch ingestion con delay
+#### B. Batch ingestion with delay
 ```typescript
-// Ingiere en lotes pequeños
+// Ingest in small batches
 const batchSize = 10;
 for (let i = 0; i < docs.length; i += batchSize) {
   const batch = docs.slice(i, i + batchSize);
   await plugin.ingest(batch, { agentId: 'test' });
   
-  // Delay entre batches
+  // Delay between batches
   if (i + batchSize < docs.length) {
     await new Promise(r => setTimeout(r, 1000));
   }
@@ -174,41 +174,41 @@ for (let i = 0; i < docs.length; i += batchSize) {
 
 ---
 
-### 6. Query retorna resultados irrelevantes
+### 6. Query returns irrelevant results
 
-**Síntomas:**
-- Los chunks retornados no son relevantes
-- Score muy bajo (< 0.7)
+**Symptoms:**
+- Returned chunks are not relevant
+- Very low score (< 0.7)
 
-**Soluciones:**
+**Solutions:**
 
-#### A. Ajusta minSimilarity
+#### A. Adjust minSimilarity
 ```typescript
 const plugin = new DocsRAGPlugin({
-  minSimilarity: 0.65,  // Bajar para más resultados (default: 0.7)
-  limit: 10,            // Aumentar límite de resultados
+  minSimilarity: 0.65,  // Lower for more results (default: 0.7)
+  limit: 10,            // Increase result limit
 });
 ```
 
-#### B. Revisa la estrategia de chunking
+#### B. Review the chunking strategy
 ```typescript
-// Para docs técnicos
-chunkingStrategy: 'markdown',  // ✅ Mejor para docs estructurados
+// For technical docs
+chunkingStrategy: 'markdown',  // ✅ Better for structured docs
 
-// Para texto largo y sin estructura
+// For long unstructured text
 chunkingStrategy: 'paragraph',
 
-// Ajusta tamaño de chunks
-maxChunkSize: 1500,  // Más grande = más contexto, menos precisión
+// Adjust chunk size
+maxChunkSize: 1500,  // Larger = more context, less precision
 ```
 
-#### C. Usa filtros
+#### C. Use filters
 ```typescript
 await plugin.retrieveContext(query, {
   agentId: 'test',
   filters: {
-    type: 'text',        // Solo chunks de texto (no código)
-    section: 'API',      // Solo sección específica
+    type: 'text',        // Text chunks only (no code)
+    section: 'API',      // Specific section only
   },
 });
 ```
@@ -217,36 +217,36 @@ await plugin.retrieveContext(query, {
 
 ### 7. "Too many chunks" / Performance issues
 
-**Síntomas:**
-- Ingestion muy lenta
-- Queries tardan mucho
-- Muchos chunks en BD
+**Symptoms:**
+- Ingestion is very slow
+- Queries take too long
+- Too many chunks in the database
 
-**Soluciones:**
+**Solutions:**
 
-#### A. Aumenta chunk size
+#### A. Increase chunk size
 ```typescript
 const plugin = new DocsRAGPlugin({
-  maxChunkSize: 2000,      // Aumentar de 1000 a 2000
-  chunkOverlap: 100,       // Reducir overlap
+  maxChunkSize: 2000,      // Increase from 1000 to 2000
+  chunkOverlap: 100,       // Reduce overlap
 });
 ```
 
-#### B. Filtra contenido antes de ingerir
+#### B. Filter content before ingesting
 ```typescript
-// No ingerir todo el documento
+// Don't ingest the entire document
 const cleanContent = content
-  .replace(/<!--[\s\S]*?-->/g, '')  // Remover comentarios HTML
-  .replace(/^```[\s\S]*?```$/gm, '')  // Remover code blocks si no los necesitas
+  .replace(/<!--[\s\S]*?-->/g, '')  // Remove HTML comments
+  .replace(/^```[\s\S]*?```$/gm, '')  // Remove code blocks if not needed
   .trim();
 ```
 
-#### C. Usa agent-specific content
+#### C. Use agent-specific content
 ```typescript
-// Contenido compartido (disponible para todos)
+// Shared content (available to all)
 await plugin.ingest(sharedDocs, { agentId: 'shared' });
 
-// Contenido específico del agente
+// Agent-specific content
 await plugin.ingest(agentSpecificDocs, { agentId: 'sales-agent' });
 ```
 
@@ -254,46 +254,46 @@ await plugin.ingest(agentSpecificDocs, { agentId: 'sales-agent' });
 
 ### 8. "Duplicate documents" / Re-indexing
 
-**Problema:** Al re-ingerir el mismo documento, se duplican los chunks.
+**Problem:** Re-ingesting the same document creates duplicate chunks.
 
-**Solución:**
+**Solution:**
 
-#### A. Usa update en vez de ingest
+#### A. Use update instead of ingest
 ```typescript
-// ❌ No hacer esto (duplica)
+// ❌ Don't do this (creates duplicates)
 await plugin.ingest([doc], { agentId: 'test' });
-await plugin.ingest([doc], { agentId: 'test' });  // Crea duplicados
+await plugin.ingest([doc], { agentId: 'test' });  // Creates duplicates
 
-// ✅ Hacer esto
-await plugin.update(doc.id, doc, { agentId: 'test' });  // Reemplaza
+// ✅ Do this instead
+await plugin.update(doc.id, doc, { agentId: 'test' });  // Replaces
 ```
 
-#### B. Limpia antes de re-ingerir
+#### B. Clean up before re-ingesting
 ```typescript
-// Opción 1: Limpiar documento específico
+// Option 1: Clean specific document
 await plugin.delete('doc-id', { agentId: 'test' });
 await plugin.ingest([newDoc], { agentId: 'test' });
 
-// Opción 2: Limpiar todo el agente
+// Option 2: Clean all agent data
 await plugin.clearAgent('test');
 await plugin.ingest(allDocs, { agentId: 'test' });
 ```
 
 ---
 
-## Scripts de Diagnóstico
+## Diagnostic Scripts
 
-### Verificar conexión y configuración
+### Verify connection and configuration
 ```bash
 pnpm verify-index
 ```
 
-### Test completo
+### Full test
 ```bash
 pnpm test-plugin
 ```
 
-### Inspeccionar documentos en MongoDB
+### Inspect documents in MongoDB
 
 ```typescript
 import { MongoClient } from 'mongodb';
@@ -303,11 +303,11 @@ await client.connect();
 
 const coll = client.db('my_docs').collection('docs_content');
 
-// Ver todos los chunks
+// View all chunks
 const chunks = await coll.find({}).limit(10).toArray();
 console.log(chunks);
 
-// Contar por tipo
+// Count by type
 const byType = await coll.aggregate([
   { $group: { _id: '$metadata.type', count: { $sum: 1 } } }
 ]).toArray();
@@ -316,7 +316,7 @@ console.log(byType);
 
 ---
 
-## Recursos Útiles
+## Useful Resources
 
 - [MongoDB Atlas Vector Search Docs](https://www.mongodb.com/docs/atlas/atlas-vector-search/)
 - [OpenAI Embeddings Guide](https://platform.openai.com/docs/guides/embeddings)
@@ -324,8 +324,8 @@ console.log(byType);
 
 ---
 
-## ¿Necesitas más ayuda?
+## Need more help?
 
 1. Check [GitHub Issues](https://github.com/vilotech/snap-agent/issues)
-2. Revisa los logs de MongoDB en Atlas UI → Metrics
-3. Habilita debug logging en tu app
+2. Review the MongoDB logs in Atlas UI → Metrics
+3. Enable debug logging in your app
