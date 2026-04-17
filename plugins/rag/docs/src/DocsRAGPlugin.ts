@@ -5,6 +5,8 @@ import type {
   IngestResult,
   IngestOptions,
 } from '@snap-agent/core';
+import { MongoClient, Db, Collection } from 'mongodb';
+import OpenAI from 'openai';
 
 // ============================================================================
 // Types
@@ -13,6 +15,14 @@ import type {
 export type EmbeddingProvider = 'openai' | 'voyage';
 
 export interface DocsRAGConfig {
+  // MongoDB connection (required)
+  mongoUri: string;
+  dbName: string;
+  collection?: string;  // Default: 'docs_content'
+
+  // Tenant isolation (required)
+  tenantId: string;
+
   /**
    * API key for embedding provider
    */
@@ -32,9 +42,13 @@ export interface DocsRAGConfig {
    */
   embeddingModel?: string;
 
+  // Vector Search configuration
+  vectorIndexName?: string;  // Default: 'docs_vector_index'
+  numCandidates?: number;    // Default: 100
+
   /**
    * Chunking strategy for documents
-   * @default 'paragraph'
+   * @default 'markdown'
    */
   chunkingStrategy?: ChunkingStrategy;
 
@@ -67,6 +81,21 @@ export interface DocsRAGConfig {
    * @default true
    */
   includeCode?: boolean;
+
+  // Filterable metadata fields (for MongoDB index optimization)
+  filterableFields?: string[];  // e.g., ['type', 'section', 'language']
+
+  // Caching
+  cache?: {
+    embeddings?: {
+      enabled: boolean;
+      ttl?: number;      // Default: 3600000 (1 hour)
+      maxSize?: number;  // Default: 1000
+    };
+  };
+
+  // Plugin priority (higher = runs first)
+  priority?: number;
 }
 
 export type ChunkingStrategy = 'paragraph' | 'sentence' | 'fixed' | 'markdown';
@@ -88,6 +117,16 @@ export interface DocumentChunk {
   createdAt: Date;
 }
 
+/**
+ * Stored document chunk with tenant and agent isolation
+ */
+export interface StoredDocChunk extends DocumentChunk {
+  chunkIndex: number;
+  tenantId: string;
+  agentId: string;  // 'shared' or specific agent ID
+  updatedAt?: Date;
+}
+
 // ============================================================================
 // Documentation RAG Plugin
 // ============================================================================
@@ -102,17 +141,35 @@ export interface DocumentChunk {
  * - Code block extraction and indexing
  * - Section hierarchy awareness
  * - Heading-based context
- * - In-memory vector storage
+ * - MongoDB persistent storage with vector search
+ * - Embedding caching for performance
  */
 export class DocsRAGPlugin implements RAGPlugin {
   name = 'docs-rag';
   type = 'rag' as const;
+  priority: number;
 
-  private config: Required<DocsRAGConfig>;
-  private chunks: Map<string, DocumentChunk[]> = new Map();
-  private documents: Map<string, RAGDocument> = new Map();
+  private config: Omit<Required<DocsRAGConfig>, 'cache' | 'priority'> & Pick<DocsRAGConfig, 'cache' | 'priority'>;
+  private client: MongoClient | null = null;
+  private db: Db | null = null;
+  private openai: OpenAI;
+
+  // Embedding cache
+  private embeddingCache = new Map<string, { value: number[]; timestamp: number }>();
+  private cacheStats = { hits: 0, misses: 0 };
 
   constructor(config: DocsRAGConfig) {
+    // Validate required fields
+    if (!config.mongoUri) {
+      throw new Error('mongoUri is required for DocsRAGPlugin');
+    }
+    if (!config.dbName) {
+      throw new Error('dbName is required for DocsRAGPlugin');
+    }
+    if (!config.tenantId) {
+      throw new Error('tenantId is required for DocsRAGPlugin');
+    }
+
     const provider = config.embeddingProvider || 'openai';
 
     // Set default model based on provider
@@ -121,17 +178,94 @@ export class DocsRAGPlugin implements RAGPlugin {
       : 'text-embedding-3-small';
 
     this.config = {
+      mongoUri: config.mongoUri,
+      dbName: config.dbName,
+      collection: config.collection || 'docs_content',
+      tenantId: config.tenantId,
       embeddingProviderApiKey: config.embeddingProviderApiKey,
       embeddingProvider: provider,
       embeddingModel: config.embeddingModel || defaultModel,
+      vectorIndexName: config.vectorIndexName || 'docs_vector_index',
+      numCandidates: config.numCandidates || 100,
       chunkingStrategy: config.chunkingStrategy || 'markdown',
       maxChunkSize: config.maxChunkSize || 1000,
       chunkOverlap: config.chunkOverlap || 200,
       limit: config.limit || 5,
       minSimilarity: config.minSimilarity || 0.7,
       includeCode: config.includeCode !== false,
+      filterableFields: config.filterableFields || ['type', 'section'],
+      cache: config.cache,
+      priority: config.priority ?? 100,
+    };
+
+    this.priority = this.config.priority ?? 100;
+    this.openai = new OpenAI({ apiKey: config.embeddingProviderApiKey });
+  }
+
+  // ============================================================================
+  // MongoDB Connection
+  // ============================================================================
+
+  private async getCollection(): Promise<Collection<StoredDocChunk>> {
+    if (!this.client) {
+      this.client = new MongoClient(this.config.mongoUri);
+      await this.client.connect();
+      this.db = this.client.db(this.config.dbName);
+      
+      // Ensure indexes
+      await this.ensureIndexes();
+    }
+    return this.db!.collection<StoredDocChunk>(this.config.collection);
+  }
+
+  private async ensureIndexes(): Promise<void> {
+    const collection = this.db!.collection(this.config.collection);
+    
+    // Create compound indexes for efficient queries
+    await collection.createIndex({ 
+      tenantId: 1, 
+      agentId: 1, 
+      documentId: 1 
+    });
+    
+    await collection.createIndex({ 
+      tenantId: 1, 
+      agentId: 1, 
+      'metadata.type': 1 
+    });
+
+    await collection.createIndex({ 
+      updatedAt: -1 
+    });
+  }
+
+  async disconnect(): Promise<void> {
+    if (this.client) {
+      await this.client.close();
+      this.client = null;
+      this.db = null;
+    }
+  }
+
+  /**
+   * Get cache statistics
+   * @returns Cache hit/miss stats and configuration
+   */
+  getCacheStats() {
+    return {
+      enabled: this.config.cache?.embeddings?.enabled ?? false,
+      hits: this.cacheStats.hits,
+      misses: this.cacheStats.misses,
+      size: this.embeddingCache.size,
+      hitRate: this.cacheStats.hits + this.cacheStats.misses > 0
+        ? this.cacheStats.hits / (this.cacheStats.hits + this.cacheStats.misses)
+        : 0,
     };
   }
+
+  // ============================================================================
+  // RAG Plugin Interface
+  // ============================================================================
 
   /**
    * Retrieve relevant documentation chunks for a query
@@ -139,15 +273,33 @@ export class DocsRAGPlugin implements RAGPlugin {
   async retrieveContext(
     message: string,
     options: {
-      agentId: string;
+      agentId?: string;
       threadId?: string;
       filters?: Record<string, any>;
       metadata?: Record<string, any>;
-    }
+    } = {}
   ): Promise<RAGContext> {
-    const agentChunks = this.chunks.get(options.agentId) || [];
+    // Generate query embedding
+    const queryVector = await this.generateEmbedding(message);
 
-    if (agentChunks.length === 0) {
+    // Build filter for vector search
+    const hardFilters: Record<string, any> = {
+      tenantId: this.config.tenantId,
+      ...options.filters,
+    };
+
+    // Agent filtering: shared content (agentId: 'shared') + agent-specific
+    if (options.agentId) {
+      hardFilters.agentId = { $in: ['shared', options.agentId] };
+    }
+
+    // Perform vector search
+    const results = await this.vectorSearch({
+      queryVector,
+      hardFilters,
+    });
+
+    if (results.length === 0) {
       return {
         content: '',
         sources: [],
@@ -155,58 +307,66 @@ export class DocsRAGPlugin implements RAGPlugin {
       };
     }
 
-    // Generate query embedding
-    const queryEmbedding = await this.generateEmbedding(message);
-
-    // Filter and score chunks
-    let scoredChunks = agentChunks
-      .map((chunk) => ({
-        ...chunk,
-        score: this.cosineSimilarity(queryEmbedding, chunk.embedding),
-      }))
-      .filter((chunk) => chunk.score >= this.config.minSimilarity);
-
-    // Apply filters if provided
-    if (options.filters) {
-      if (options.filters.type) {
-        scoredChunks = scoredChunks.filter(
-          (c) => c.metadata.type === options.filters!.type
-        );
-      }
-      if (options.filters.section) {
-        scoredChunks = scoredChunks.filter(
-          (c) => c.metadata.section?.toLowerCase().includes(options.filters!.section.toLowerCase())
-        );
-      }
-    }
-
-    // Sort by score and limit
-    scoredChunks = scoredChunks
-      .sort((a, b) => b.score - a.score)
-      .slice(0, this.config.limit);
-
     // Format context with section headers
-    const content = this.formatChunksToContext(scoredChunks);
+    const content = this.formatChunksToContext(results);
 
     return {
       content,
-      sources: scoredChunks.map((chunk) => ({
+      sources: results.map((chunk) => ({
         id: chunk.id,
         documentId: chunk.documentId,
-        title: chunk.metadata.title,
-        section: chunk.metadata.section,
-        type: chunk.metadata.type,
         score: chunk.score,
+        metadata: chunk.metadata,
       })),
       metadata: {
-        count: scoredChunks.length,
-        totalChunks: agentChunks.length,
+        count: results.length,
         strategy: this.config.chunkingStrategy,
-        avgScore: scoredChunks.length > 0
-          ? scoredChunks.reduce((sum, c) => sum + c.score, 0) / scoredChunks.length
+        avgScore: results.length > 0
+          ? results.reduce((sum, c) => sum + c.score, 0) / results.length
           : 0,
       },
     };
+  }
+
+  /**
+   * Vector search using MongoDB Atlas Search
+   */
+  private async vectorSearch(options: {
+    queryVector: number[];
+    hardFilters: Record<string, any>;
+  }): Promise<Array<StoredDocChunk & { score: number }>> {
+    const collection = await this.getCollection();
+
+    const pipeline: any[] = [
+      {
+        $vectorSearch: {
+          index: this.config.vectorIndexName,
+          path: 'embedding',
+          queryVector: options.queryVector,
+          numCandidates: this.config.numCandidates,
+          limit: this.config.limit * 2,  // Fetch more for post-filtering
+          filter: options.hardFilters,
+        },
+      },
+      {
+        $addFields: {
+          score: { $meta: 'vectorSearchScore' },
+        },
+      },
+    ];
+
+    // Apply minimum score filter
+    if (this.config.minSimilarity) {
+      pipeline.push({
+        $match: { score: { $gte: this.config.minSimilarity } },
+      });
+    }
+
+    pipeline.push({ $limit: this.config.limit });
+
+    const results = await collection.aggregate(pipeline).toArray();
+
+    return results as Array<StoredDocChunk & { score: number }>;
   }
 
   /**
@@ -254,35 +414,49 @@ export class DocsRAGPlugin implements RAGPlugin {
       };
     }
 
+    const collection = await this.getCollection();
     let indexed = 0;
+    let totalChunks = 0;
     const errors: Array<{ id: string; error: string }> = [];
-    const agentChunks = this.chunks.get(options.agentId) || [];
 
     for (const doc of documents) {
       try {
-        // Store original document
-        this.documents.set(`${options.agentId}:${doc.id}`, doc);
-
         // Chunk the document
         const chunks = this.chunkDocument(doc);
+        totalChunks += chunks.length;
 
-        // Generate embeddings for all chunks
-        for (const chunk of chunks) {
+        // Generate embeddings and store each chunk
+        for (let i = 0; i < chunks.length; i++) {
+          const chunk = chunks[i];
           const embedding = await this.generateEmbedding(chunk.content);
 
-          const storedChunk: DocumentChunk = {
-            id: `${doc.id}-chunk-${agentChunks.length}`,
+          const storedChunk: Omit<StoredDocChunk, 'createdAt' | 'updatedAt'> = {
+            id: `chunk-${doc.id}-${i}`,
             documentId: doc.id,
+            chunkIndex: i,
             content: chunk.content,
             embedding,
             metadata: {
               ...doc.metadata,
               ...chunk.metadata,
             },
-            createdAt: new Date(),
+            tenantId: this.config.tenantId,
+            agentId: options.agentId,
           };
 
-          agentChunks.push(storedChunk);
+          // Upsert to MongoDB
+          await collection.updateOne(
+            {
+              tenantId: this.config.tenantId,
+              agentId: options.agentId,
+              id: storedChunk.id,
+            },
+            {
+              $set: { ...storedChunk, updatedAt: new Date() },
+              $setOnInsert: { createdAt: new Date() },
+            },
+            { upsert: true }
+          );
         }
 
         indexed++;
@@ -294,16 +468,14 @@ export class DocsRAGPlugin implements RAGPlugin {
       }
     }
 
-    this.chunks.set(options.agentId, agentChunks);
-
     return {
       success: errors.length === 0,
       indexed,
       failed: errors.length,
       errors: errors.length > 0 ? errors : undefined,
       metadata: {
-        totalChunks: agentChunks.length,
         strategy: this.config.chunkingStrategy,
+        totalChunks,
       },
     };
   }
@@ -549,12 +721,8 @@ export class DocsRAGPlugin implements RAGPlugin {
       throw new Error('agentId is required');
     }
 
-    // Get original document BEFORE deletion
-    const docKey = `${options.agentId}:${id}`;
-    const existing = this.documents.get(docKey);
-
-    if (!existing && !document.content) {
-      throw new Error(`Document not found: ${id}`);
+    if (!document.content) {
+      throw new Error('document.content is required for update');
     }
 
     // Remove existing chunks for this document
@@ -563,11 +731,8 @@ export class DocsRAGPlugin implements RAGPlugin {
     // Re-ingest with updated content
     const updatedDoc: RAGDocument = {
       id,
-      content: document.content || existing?.content || '',
-      metadata: {
-        ...existing?.metadata,
-        ...document.metadata,
-      },
+      content: document.content,
+      metadata: document.metadata || {},
     };
 
     await this.ingest([updatedDoc], options);
@@ -582,57 +747,71 @@ export class DocsRAGPlugin implements RAGPlugin {
     }
 
     const idsArray = Array.isArray(ids) ? ids : [ids];
-    const agentChunks = this.chunks.get(options.agentId) || [];
-    const initialCount = agentChunks.length;
+    const collection = await this.getCollection();
 
-    // Remove chunks belonging to the documents
-    const filtered = agentChunks.filter(
-      (chunk) => !idsArray.includes(chunk.documentId)
-    );
+    const result = await collection.deleteMany({
+      tenantId: this.config.tenantId,
+      agentId: options.agentId,
+      documentId: { $in: idsArray },
+    });
 
-    this.chunks.set(options.agentId, filtered);
-
-    // Remove document references
-    for (const id of idsArray) {
-      this.documents.delete(`${options.agentId}:${id}`);
-    }
-
-    return initialCount - filtered.length;
+    return result.deletedCount;
   }
+
+  // ============================================================================
+  // Embedding Generation
+  // ============================================================================
 
   /**
    * Generate embedding using configured provider (OpenAI or Voyage)
    */
   private async generateEmbedding(text: string): Promise<number[]> {
-    if (this.config.embeddingProvider === 'voyage') {
-      return this.generateVoyageEmbedding(text);
+    const cacheConfig = this.config.cache?.embeddings;
+
+    // Check cache
+    if (cacheConfig?.enabled) {
+      const cached = this.embeddingCache.get(text);
+      const ttl = cacheConfig.ttl ?? 3600000;
+      if (cached && Date.now() - cached.timestamp < ttl) {
+        this.cacheStats.hits++;
+        return cached.value;
+      }
     }
-    return this.generateOpenAIEmbedding(text);
+
+    this.cacheStats.misses++;
+
+    // Generate embedding based on provider
+    let embedding: number[];
+    if (this.config.embeddingProvider === 'voyage') {
+      embedding = await this.generateVoyageEmbedding(text);
+    } else {
+      embedding = await this.generateOpenAIEmbedding(text);
+    }
+
+    // Cache result
+    if (cacheConfig?.enabled) {
+      const maxSize = cacheConfig.maxSize ?? 1000;
+      if (this.embeddingCache.size >= maxSize) {
+        // Remove oldest entry
+        const firstKey = this.embeddingCache.keys().next().value;
+        if (firstKey) this.embeddingCache.delete(firstKey);
+      }
+      this.embeddingCache.set(text, { value: embedding, timestamp: Date.now() });
+    }
+
+    return embedding;
   }
 
   /**
    * Generate embedding using OpenAI
    */
   private async generateOpenAIEmbedding(text: string): Promise<number[]> {
-    const response = await fetch('https://api.openai.com/v1/embeddings', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${this.config.embeddingProviderApiKey}`,
-      },
-      body: JSON.stringify({
-        model: this.config.embeddingModel,
-        input: text,
-      }),
+    const response = await this.openai.embeddings.create({
+      model: this.config.embeddingModel,
+      input: text,
     });
 
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`OpenAI API error: ${response.status} - ${error}`);
-    }
-
-    const data = (await response.json()) as { data: Array<{ embedding: number[] }> };
-    return data.data[0].embedding;
+    return response.data[0].embedding;
   }
 
   /**
@@ -660,71 +839,83 @@ export class DocsRAGPlugin implements RAGPlugin {
     return data.data[0].embedding;
   }
 
-  /**
-   * Calculate cosine similarity
-   */
-  private cosineSimilarity(a: number[], b: number[]): number {
-    let dotProduct = 0;
-    let normA = 0;
-    let normB = 0;
-
-    for (let i = 0; i < a.length; i++) {
-      dotProduct += a[i] * b[i];
-      normA += a[i] * a[i];
-      normB += b[i] * b[i];
-    }
-
-    normA = Math.sqrt(normA);
-    normB = Math.sqrt(normB);
-
-    if (normA === 0 || normB === 0) return 0;
-    return dotProduct / (normA * normB);
-  }
+  // ============================================================================
+  // Utility Methods
+  // ============================================================================
 
   /**
-   * Get statistics
+   * Get statistics about indexed documents
    */
-  getStats(): Record<string, any> {
-    const stats: Record<string, any> = {
-      totalAgents: this.chunks.size,
-      strategy: this.config.chunkingStrategy,
-      agentStats: {},
-    };
+  async getStats(): Promise<Record<string, any>> {
+    const collection = await this.getCollection();
+    
+    // Get total count by tenant
+    const totalChunks = await collection.countDocuments({
+      tenantId: this.config.tenantId,
+    });
 
-    for (const [agentId, chunks] of this.chunks.entries()) {
-      const byType = { text: 0, code: 0, heading: 0 };
-      chunks.forEach((c) => {
-        byType[c.metadata.type as keyof typeof byType]++;
-      });
+    // Get count by agent
+    const agentCounts = await collection.aggregate([
+      { $match: { tenantId: this.config.tenantId } },
+      { 
+        $group: { 
+          _id: '$agentId',
+          count: { $sum: 1 },
+          types: { $addToSet: '$metadata.type' },
+        } 
+      },
+    ]).toArray();
 
-      stats.agentStats[agentId] = {
-        totalChunks: chunks.length,
-        byType,
+    const agentStats: Record<string, any> = {};
+    for (const agent of agentCounts) {
+      agentStats[agent._id] = {
+        totalChunks: agent.count,
+        types: agent.types,
       };
     }
 
-    return stats;
+    return {
+      tenantId: this.config.tenantId,
+      totalChunks,
+      strategy: this.config.chunkingStrategy,
+      agentStats,
+      cacheStats: this.cacheStats,
+    };
+  }
+
+  /**
+   * Clear embedding cache
+   */
+  clearCache(): void {
+    this.embeddingCache.clear();
+    this.cacheStats = { hits: 0, misses: 0 };
   }
 
   /**
    * Clear all data for an agent
    */
-  clearAgent(agentId: string): void {
-    this.chunks.delete(agentId);
-    // Remove documents for this agent
-    for (const key of this.documents.keys()) {
-      if (key.startsWith(`${agentId}:`)) {
-        this.documents.delete(key);
-      }
-    }
+  async clearAgent(agentId: string): Promise<number> {
+    const collection = await this.getCollection();
+    
+    const result = await collection.deleteMany({
+      tenantId: this.config.tenantId,
+      agentId,
+    });
+
+    return result.deletedCount;
   }
 
   /**
-   * Clear all data
+   * Clear all data for the tenant
    */
-  clearAll(): void {
-    this.chunks.clear();
-    this.documents.clear();
+  async clearAll(): Promise<number> {
+    const collection = await this.getCollection();
+    
+    const result = await collection.deleteMany({
+      tenantId: this.config.tenantId,
+    });
+
+    return result.deletedCount;
   }
 }
 
