@@ -42,7 +42,7 @@
   },
   "peerDependencies": {
     "@snap-agent/core": "^0.1.0",
-    "mongodb": "^6.0.0"
+    "mongodb": "^6.0.0 || ^7.0.0"
   },
   "dependencies": {
     "openai": "^5.0.1"
