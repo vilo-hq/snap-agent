@@ -1,16 +1,16 @@
-# 📄 Formatos de Documentos Soportados
+# 📄 Supported Document Formats
 
-## 🏗️ Arquitectura de Parsing
+## 🏗️ Parsing Architecture
 
-**DocsRAGPlugin acepta solo texto plano (`string`)**. El parsing de cualquier formato **es responsabilidad de tu aplicación**.
+**DocsRAGPlugin accepts only plain text (`string`)**. Parsing any format **is your application's responsibility**.
 
 ```
 ┌─────────────────┐
-│ Tu Aplicación   │
+│ Your Application│
 ├─────────────────┤
 │  PDF Parser     │──┐
 │  DOCX Parser    │  │
-│  HTML Parser    │  ├─> Texto plano
+│  HTML Parser    │  ├─> Plain text
 │  MD Parser      │  │
 │  Code Parser    │──┘
 └─────────────────┘
@@ -26,23 +26,23 @@
 └─────────────────┘
 ```
 
-### 🎯 Separación de Responsabilidades
+### 🎯 Separation of Concerns
 
-| Componente | Responsabilidad |
-|------------|----------------|
-| **Tu App** | Leer archivos, parsear formatos, extraer texto |
-| **Plugin** | Chunking, embeddings, almacenamiento, búsqueda |
+| Component | Responsibility |
+|-----------|---------------|
+| **Your App** | Read files, parse formats, extract text |
+| **Plugin** | Chunking, embeddings, storage, search |
 
 ---
 
-## 📚 Formatos y Librerías
+## 📚 Formats and Libraries
 
 ### 1️⃣ **Markdown** (.md)
 
-**✅ Más recomendado** - Parsing nativo, soporte completo
+**✅ Most recommended** - Native parsing, full support
 
 ```bash
-# No requiere librerías adicionales
+# No additional libraries required
 ```
 
 ```typescript
@@ -57,13 +57,13 @@ await plugin.ingest([{
 }]);
 ```
 
-**Chunking Strategy:** `markdown` (respeta headers)
+**Chunking Strategy:** `markdown` (respects headers)
 
 ---
 
 ### 2️⃣ **PDF** (.pdf)
 
-**Librería:** [`pdf-parse`](https://www.npmjs.com/package/pdf-parse)
+**Library:** [`pdf-parse`](https://www.npmjs.com/package/pdf-parse)
 
 ```bash
 pnpm add pdf-parse
@@ -88,20 +88,20 @@ await plugin.ingest([{
 }]);
 ```
 
-**Ver ejemplo completo:** [sdk/examples/docs-rag/ingest-pdf.ts](../../../sdk/examples/docs-rag/ingest-pdf.ts)
+**See full example:** [sdk/examples/docs-rag/ingest-pdf.ts](../../../sdk/examples/docs-rag/ingest-pdf.ts)
 
-**Chunking Strategy:** `paragraph` o `fixed`
+**Chunking Strategy:** `paragraph` or `fixed`
 
-**⚠️ Limitaciones:**
-- No extrae imágenes
-- Tablas pueden perder formato
-- PDFs escaneados (OCR) requieren procesamiento adicional
+**⚠️ Limitations:**
+- Does not extract images
+- Tables may lose formatting
+- Scanned PDFs (OCR) require additional processing
 
 ---
 
 ### 3️⃣ **Microsoft Word** (.docx)
 
-**Librería:** [`mammoth`](https://www.npmjs.com/package/mammoth)
+**Library:** [`mammoth`](https://www.npmjs.com/package/mammoth)
 
 ```bash
 pnpm add mammoth
@@ -116,7 +116,7 @@ const result = await mammoth.convertToMarkdown({
 
 await plugin.ingest([{
   id: 'document',
-  content: result.value, // Markdown generado
+  content: result.value, // Generated Markdown
   metadata: {
     type: 'docx',
     warnings: result.messages
@@ -124,20 +124,20 @@ await plugin.ingest([{
 }]);
 ```
 
-**Ver ejemplo completo:** [sdk/examples/docs-rag/ingest-docx.ts](../../../sdk/examples/docs-rag/ingest-docx.ts)
+**See full example:** [sdk/examples/docs-rag/ingest-docx.ts](../../../sdk/examples/docs-rag/ingest-docx.ts)
 
-**Chunking Strategy:** `markdown` (convierte a MD primero)
+**Chunking Strategy:** `markdown` (converts to MD first)
 
-**✨ Ventajas:**
-- Preserva formato (negrita, cursiva, listas)
-- Convierte a Markdown automáticamente
-- Extrae estilos de párrafos
+**✨ Advantages:**
+- Preserves formatting (bold, italic, lists)
+- Automatically converts to Markdown
+- Extracts paragraph styles
 
 ---
 
 ### 4️⃣ **HTML** (.html, URLs)
 
-**Librerías:** [`cheerio`](https://www.npmjs.com/package/cheerio) + [`html-to-text`](https://www.npmjs.com/package/html-to-text)
+**Libraries:** [`cheerio`](https://www.npmjs.com/package/cheerio) + [`html-to-text`](https://www.npmjs.com/package/html-to-text)
 
 ```bash
 pnpm add cheerio html-to-text
@@ -147,20 +147,20 @@ pnpm add cheerio html-to-text
 import * as cheerio from 'cheerio';
 import { convert } from 'html-to-text';
 
-// Desde archivo
+// From file
 const html = readFileSync('page.html', 'utf-8');
 
-// O desde URL
+// Or from URL
 const response = await fetch('https://docs.example.com');
 const html = await response.text();
 
-// Limpiar con Cheerio
+// Clean with Cheerio
 const $ = cheerio.load(html);
 $('script, style, nav, footer').remove();
 
 const mainContent = $('main').html() || $('body').html();
 
-// Convertir a texto plano
+// Convert to plain text
 const text = convert(mainContent, {
   wordwrap: false,
   selectors: [
@@ -180,20 +180,20 @@ await plugin.ingest([{
 }]);
 ```
 
-**Ver ejemplo completo:** [sdk/examples/docs-rag/ingest-html.ts](../../../sdk/examples/docs-rag/ingest-html.ts)
+**See full example:** [sdk/examples/docs-rag/ingest-html.ts](../../../sdk/examples/docs-rag/ingest-html.ts)
 
 **Chunking Strategy:** `paragraph`
 
-**🎯 Uso ideal:**
-- Scraping de documentación web
-- Ingesta de wikis
-- Crawling de sitios
+**🎯 Ideal use cases:**
+- Web documentation scraping
+- Wiki ingestion
+- Site crawling
 
 ---
 
-### 5️⃣ **Código Fuente** (.ts, .js, .py, .java, etc.)
+### 5️⃣ **Source Code** (.ts, .js, .py, .java, etc.)
 
-**✅ No requiere librerías** - Leer como texto plano
+**✅ No libraries required** - Read as plain text
 
 ```typescript
 import { readFileSync, readdirSync } from 'fs';
@@ -212,11 +212,11 @@ await plugin.ingest([{
 }]);
 ```
 
-**Ver ejemplo completo:** [sdk/examples/docs-rag/ingest-code.ts](../../../sdk/examples/docs-rag/ingest-code.ts)
+**See full example:** [sdk/examples/docs-rag/ingest-code.ts](../../../sdk/examples/docs-rag/ingest-code.ts)
 
-**Chunking Strategy:** `fixed` (mejor para código)
+**Chunking Strategy:** `fixed` (best for code)
 
-**Lenguajes soportados:**
+**Supported languages:**
 - TypeScript/JavaScript (.ts, .tsx, .js, .jsx)
 - Python (.py)
 - Java (.java)
@@ -231,9 +231,9 @@ await plugin.ingest([{
 
 ---
 
-### 6️⃣ **Texto Plano** (.txt)
+### 6️⃣ **Plain Text** (.txt)
 
-**✅ Soporte nativo**
+**✅ Native support**
 
 ```typescript
 const text = readFileSync('notes.txt', 'utf-8');
@@ -245,13 +245,13 @@ await plugin.ingest([{
 }]);
 ```
 
-**Chunking Strategy:** `paragraph` o `sentence`
+**Chunking Strategy:** `paragraph` or `sentence`
 
 ---
 
-### 7️⃣ **JSON/YAML** (Configuración)
+### 7️⃣ **JSON/YAML** (Configuration)
 
-**Para documentación de APIs o configs**
+**For API documentation or configs**
 
 ```typescript
 import yaml from 'js-yaml';
@@ -275,71 +275,71 @@ await plugin.ingest([{
 
 ---
 
-## 🔄 Flujo Completo de Ingesta
+## 🔄 Complete Ingestion Flow
 
 ```typescript
-// 1. Tu aplicación parsea el archivo
+// 1. Your application parses the file
 const parsedText = await parseFile('document.pdf');
 
-// 2. DocsRAGPlugin procesa el texto
+// 2. DocsRAGPlugin processes the text
 const result = await plugin.ingest([{
   id: 'unique-doc-id',
-  content: parsedText, // ← Solo texto plano
+  content: parsedText, // ← Plain text only
   metadata: {
-    title: 'Mi Documento',
+    title: 'My Document',
     type: 'pdf',
     source: 'uploads/doc.pdf',
-    // ... más metadata
+    // ... more metadata
   }
 }], {
   agentId: 'my-agent'
 });
 
-// 3. Plugin automáticamente:
-//    - Divide en chunks
-//    - Genera embeddings
-//    - Almacena en MongoDB
-//    - Crea índice vectorial
+// 3. Plugin automatically:
+//    - Splits into chunks
+//    - Generates embeddings
+//    - Stores in MongoDB
+//    - Creates vector index
 ```
 
 ---
 
-## 🚀 Casos de Uso por Formato
+## 🚀 Use Cases by Format
 
-| Formato | Caso de Uso | Chunking |
-|---------|-------------|----------|
-| **Markdown** | Documentación técnica, READMEs | `markdown` |
-| **PDF** | Manuales, libros, papers | `paragraph` |
-| **DOCX** | Documentos corporativos, reportes | `markdown` |
-| **HTML** | Wikis, docs web, blogs | `paragraph` |
-| **Código** | Search de implementaciones, docs automáticas | `fixed` |
-| **TXT** | Notas, logs, transcripciones | `sentence` |
+| Format | Use Case | Chunking |
+|--------|----------|----------|
+| **Markdown** | Technical documentation, READMEs | `markdown` |
+| **PDF** | Manuals, books, papers | `paragraph` |
+| **DOCX** | Corporate documents, reports | `markdown` |
+| **HTML** | Wikis, web docs, blogs | `paragraph` |
+| **Code** | Implementation search, auto-generated docs | `fixed` |
+| **TXT** | Notes, logs, transcriptions | `sentence` |
 
 ---
 
-## 💡 Recomendaciones
+## 💡 Recommendations
 
 ### ✅ DO
 
-- **Parsea en tu aplicación** antes de llamar `ingest()`
-- **Extrae metadata relevante** (título, autor, fecha, etc.)
-- **Limpia el contenido** (remueve headers/footers innecesarios)
-- **Usa chunking strategy apropiada** para cada formato
-- **Valida el texto extraído** antes de ingerir
+- **Parse in your application** before calling `ingest()`
+- **Extract relevant metadata** (title, author, date, etc.)
+- **Clean the content** (remove unnecessary headers/footers)
+- **Use the appropriate chunking strategy** for each format
+- **Validate extracted text** before ingesting
 
 ### ❌ DON'T
 
-- No envíes buffers binarios a `ingest()`
-- No ingieras contenido sin procesar (HTML con scripts, etc.)
-- No uses `markdown` strategy con código o PDFs
-- No ingieras archivos muy grandes sin dividir primero
-- No olvides manejar errores de parsing
+- Don't send binary buffers to `ingest()`
+- Don't ingest unprocessed content (HTML with scripts, etc.)
+- Don't use `markdown` strategy with code or PDFs
+- Don't ingest very large files without splitting first
+- Don't forget to handle parsing errors
 
 ---
 
-## 🛠️ Paquete Helper (Futuro)
+## 🛠️ Helper Package (Future)
 
-Si necesitas parsing out-of-the-box, considera crear:
+If you need out-of-the-box parsing, consider creating:
 
 ```bash
 @snap-agent/rag-helpers
@@ -357,32 +357,32 @@ const text = await parseDocument('file.pdf', {
 await plugin.ingest([{ id: 'doc', content: text }]);
 ```
 
-**Ventajas:**
-- Detección automática de formato
-- Configuración unificada
-- Manejo de errores consistente
-- Optimizaciones específicas
+**Advantages:**
+- Automatic format detection
+- Unified configuration
+- Consistent error handling
+- Format-specific optimizations
 
 ---
 
-## 📞 Soporte
+## 📞 Support
 
-¿Necesitas soporte para otro formato?
+Need support for another format?
 
-1. Busca una librería de parsing en npm
-2. Extrae el texto
-3. Pásalo a `ingest()`
+1. Find a parsing library on npm
+2. Extract the text
+3. Pass it to `ingest()`
 
-**Ejemplos:**
-- **Excel** → `xlsx` → exportar a CSV/texto
-- **RTF** → `rtf-parser` → texto plano
-- **Imágenes (OCR)** → `tesseract.js` → texto extraído
-- **Diagramas** → `mermaid` → descripción texto
+**Examples:**
+- **Excel** → `xlsx` → export to CSV/text
+- **RTF** → `rtf-parser` → plain text
+- **Images (OCR)** → `tesseract.js` → extracted text
+- **Diagrams** → `mermaid` → text description
 
 ---
 
-## 🔗 Referencias
+## 🔗 References
 
-- [Examples Directory](../../../sdk/examples/docs-rag/) - Código completo para cada formato
-- [DocsRAGPlugin API](./README.md#api-reference) - Referencia completa
-- [Chunking Strategies](./README.md#chunking-strategies) - Detalles de cada estrategia
+- [Examples Directory](../../../sdk/examples/docs-rag/) - Complete code for each format
+- [DocsRAGPlugin API](./README.md#api-reference) - Full reference
+- [Chunking Strategies](./README.md#chunking-strategies) - Details on each strategy

@@ -1,37 +1,37 @@
-# 🚀 Setup Rápido - DocsRAGPlugin
+# 🚀 Quick Setup - DocsRAGPlugin
 
-## Instalación Inicial (Primera Vez)
+## Initial Setup (First Time)
 
-### 1. Instala Dependencias
+### 1. Install Dependencies
 
 ```bash
 cd plugins/rag/docs
 pnpm install
 ```
 
-Esto instalará:
-- ✅ `mongodb` - Cliente de MongoDB
-- ✅ `openai` - Cliente de OpenAI para embeddings
-- ✅ `tsx` - Para ejecutar TypeScript directamente
+This will install:
+- ✅ `mongodb` - MongoDB client
+- ✅ `openai` - OpenAI client for embeddings
+- ✅ `tsx` - To run TypeScript directly
 - ✅ `typescript`, `tsup` - Build tools
 
-### 2. Configura Variables de Entorno
+### 2. Configure Environment Variables
 
-**📁 Ubicación:** El archivo `.env` debe estar en:
+**📁 Location:** The `.env` file should be at:
 ```
 plugins/rag/docs/.env
 ```
 
-> 📖 **Ver estructura completa:** [FILE_STRUCTURE.md](./docs/FILE_STRUCTURE.md)
+> 📖 **See full structure:** [FILE_STRUCTURE.md](./docs/FILE_STRUCTURE.md)
 
-Crea el archivo copiando el ejemplo:
+Create the file by copying the example:
 
 ```bash
 cd plugins/rag/docs
 cp .env.example .env
 ```
 
-Edita `.env` con tus credenciales:
+Edit `.env` with your credentials:
 
 ```env
 # MongoDB Atlas
@@ -42,42 +42,42 @@ MONGODB_COLLECTION=docs_content
 # OpenAI
 OPENAI_API_KEY=sk-proj-xxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
-# Opcionales
+# Optional
 TENANT_ID=my-company
 AGENT_ID=test-agent
 ```
 
-**¿Cómo obtener estas credenciales?**
+**How to obtain these credentials?**
 
 #### MongoDB URI:
-1. Ve a [MongoDB Atlas](https://cloud.mongodb.com)
-2. Click en tu cluster → **"Connect"**
-3. Selecciona **"Connect your application"**
-4. Copia el connection string
-5. Reemplaza `<password>` con tu contraseña real
+1. Go to [MongoDB Atlas](https://cloud.mongodb.com)
+2. Click on your cluster → **"Connect"**
+3. Select **"Connect your application"**
+4. Copy the connection string
+5. Replace `<password>` with your actual password
 
 #### OpenAI API Key:
-1. Ve a [OpenAI Platform](https://platform.openai.com/api-keys)
+1. Go to [OpenAI Platform](https://platform.openai.com/api-keys)
 2. Click **"+ Create new secret key"**
-3. Copia la key (empieza con `sk-proj-`)
+3. Copy the key (starts with `sk-proj-`)
 
-### 3. Crea el Vector Search Index en MongoDB
+### 3. Create the Vector Search Index in MongoDB
 
-**Opción 1: Guía Visual Completa**
-📘 Sigue paso a paso: [ATLAS_SETUP_GUIDE.md](./docs/ATLAS_SETUP_GUIDE.md)
+**Option 1: Full Visual Guide**
+📘 Follow step by step: [ATLAS_SETUP_GUIDE.md](./docs/ATLAS_SETUP_GUIDE.md)
 
-**Opción 2: Pasos Rápidos**
+**Option 2: Quick Steps**
 
-1. Ve a [MongoDB Atlas](https://cloud.mongodb.com)
-2. Tu Cluster → **"Atlas Search"** (menú izquierdo)
+1. Go to [MongoDB Atlas](https://cloud.mongodb.com)
+2. Your Cluster → **"Atlas Search"** (left menu)
 3. Click **"Create Search Index"**
-4. Selecciona **"Atlas Vector Search"**
-5. Configuración:
+4. Select **"Atlas Vector Search"**
+5. Configuration:
    - Method: **JSON Editor**
    - Index Name: `docs_vector_index`
    - Database: `my_docs`
    - Collection: `docs_content`
-6. Pega este JSON:
+6. Paste this JSON:
 
 ```json
 {
@@ -109,66 +109,66 @@ AGENT_ID=test-agent
 ```
 
 7. Click **"Create Search Index"**
-8. Espera a que el status sea **"Active"** (1-3 minutos)
+8. Wait for the status to be **"Active"** (1-3 minutes)
 
-### 4. Verifica que Todo Funciona
+### 4. Verify Everything Works
 
 ```bash
 cd ../../../sdk/examples/docs-rag
 npx tsx verify-index.ts
 ```
 
-Salida esperada:
+Expected output:
 ```
-✅ Conectado a MongoDB
-✅ Colección "docs_content" existe
-✅ Índice "docs_vector_index" encontrado!
-   📊 Estado: Active
+✅ Connected to MongoDB
+✅ Collection "docs_content" exists
+✅ Index "docs_vector_index" found!
+   📊 Status: Active
 ```
 
-Si ves errores, consulta [TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md)
+If you see errors, check [TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md)
 
-### 5. Prueba el Plugin
+### 5. Test the Plugin
 
 ```bash
 cd ../../../sdk/examples/docs-rag
 npx tsx test-plugin.ts
 ```
 
-Esto:
-1. Ingiere un documento de prueba
-2. Realiza búsquedas semánticas
-3. Muestra estadísticas
-4. Verifica la persistencia
+This will:
+1. Ingest a test document
+2. Perform semantic searches
+3. Show statistics
+4. Verify persistence
 
-Salida esperada:
+Expected output:
 ```
-✅ Documento ingerido: 1 documento(s)
+✅ Document ingested: 1 document(s)
 
 🔍 Query: "How do I authenticate?"
-   📊 Resultados: 2
-   📈 Score promedio: 0.847
+   📊 Results: 2
+   📈 Average score: 0.847
 
-✅ Prueba completada exitosamente!
+✅ Test completed successfully!
 ```
 
 ---
 
-## Scripts Disponibles
+## Available Scripts
 
-| Comando | Descripción | Ubicación |
+| Command | Description | Location |
 |---------|-------------|----------|
-| `pnpm build` | Compila el plugin a dist/ | `plugins/rag/docs/` |
-| `pnpm dev` | Compila en modo watch | `plugins/rag/docs/` |
-| `pnpm test` | Ejecuta tests unitarios | `plugins/rag/docs/` |
-| `npx tsx verify-index.ts` | Verifica MongoDB | `sdk/examples/docs-rag/` |
-| `npx tsx test-plugin.ts` | Prueba completa del plugin | `sdk/examples/docs-rag/` |
+| `pnpm build` | Build the plugin to dist/ | `plugins/rag/docs/` |
+| `pnpm dev` | Build in watch mode | `plugins/rag/docs/` |
+| `pnpm test` | Run unit tests | `plugins/rag/docs/` |
+| `npx tsx verify-index.ts` | Verify MongoDB | `sdk/examples/docs-rag/` |
+| `npx tsx test-plugin.ts` | Full plugin test | `sdk/examples/docs-rag/` |
 
 ---
 
-## Uso en tu Aplicación
+## Usage in Your Application
 
-Una vez configurado, úsalo así:
+Once configured, use it like this:
 
 ```typescript
 import { DocsRAGPlugin } from '@snap-agent/rag-docs';
@@ -197,7 +197,7 @@ const agent = await client.createAgent({
       embeddingProviderApiKey: process.env.OPENAI_API_KEY!,
       chunkingStrategy: 'markdown',
       
-      // Cache (opcional pero recomendado)
+      // Cache (optional but recommended)
       cache: {
         embeddings: {
           enabled: true,
@@ -209,7 +209,7 @@ const agent = await client.createAgent({
   ],
 });
 
-// Ingiere documentos
+// Ingest documents
 await agent.ingestDocuments([
   {
     id: 'getting-started',
@@ -218,7 +218,7 @@ await agent.ingestDocuments([
   },
 ]);
 
-// Haz preguntas
+// Ask questions
 const response = await client.chat({
   threadId: thread.id,
   message: 'How do I get started?',
@@ -230,51 +230,51 @@ console.log(response.text);
 
 ---
 
-## ⚠️ Requisitos
+## ⚠️ Requirements
 
 ### MongoDB Atlas Tier
-- ❌ **M0/M2/M5** (Free) - NO soportan Vector Search
-- ✅ **M10+** - Requerido (~$0.08/hora)
+- ❌ **M0/M2/M5** (Free) - Do NOT support Vector Search
+- ✅ **M10+** - Required (~$0.08/hour)
 
-Para upgradear: Atlas → Cluster → Edit Configuration → M10
+To upgrade: Atlas → Cluster → Edit Configuration → M10
 
 ### Node.js
-- Versión 18+ recomendada
+- Version 18+ recommended
 
-### Whitelist IP
-Para conectarte a Atlas desde tu máquina:
+### IP Whitelist
+To connect to Atlas from your machine:
 1. Atlas → **Network Access**
 2. **Add IP Address**
 3. Development: "Allow Access from Anywhere" (0.0.0.0/0)
 
 ---
 
-## 📚 Más Recursos
+## 📚 More Resources
 
-- 📘 [ATLAS_SETUP_GUIDE.md](./docs/ATLAS_SETUP_GUIDE.md) - Guía visual detallada
-- 🔧 [TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md) - Soluciones a problemas comunes
-- 📖 [README.md](./README.md) - Documentación completa de API
+- 📘 [ATLAS_SETUP_GUIDE.md](./docs/ATLAS_SETUP_GUIDE.md) - Detailed visual guide
+- 🔧 [TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md) - Solutions to common problems
+- 📖 [README.md](./README.md) - Full API documentation
 
 ---
 
-## 🆘 ¿Problemas?
+## 🆘 Problems?
 
-### "tsx no se reconoce como comando"
+### "tsx is not recognized as a command"
 ```bash
-# Asegúrate de instalar dependencias primero
+# Make sure to install dependencies first
 pnpm install
 ```
 
 ### "Cannot find module '@snap-agent/core'"
 ```bash
-# Instala las peer dependencies
-cd ../../../  # Ir a la raíz del workspace
+# Install peer dependencies
+cd ../../../  # Go to workspace root
 pnpm install
 ```
 
 ### "MongoServerError: connection timeout"
-- Verifica que tu IP esté en whitelist (Network Access en Atlas)
-- Verifica que el MONGODB_URI sea correcto
+- Verify your IP is whitelisted (Network Access in Atlas)
+- Verify the MONGODB_URI is correct
 
-### Más ayuda
-Ver [TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md)
+### More help
+See [TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md)

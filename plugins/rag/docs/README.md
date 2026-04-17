@@ -2,7 +2,7 @@
 
 Documentation RAG plugin for SnapAgent SDK - Semantic search over markdown, code, and technical documentation.
 
-> 🚀 **Primera vez?** Ver [QUICKSTART.md](./QUICKSTART.md) para setup completo paso a paso.
+> 🚀 **First time?** See [QUICKSTART.md](./QUICKSTART.md) for a complete step-by-step setup.
 
 ## Features
 
@@ -34,9 +34,9 @@ This plugin requires MongoDB Atlas with vector search capabilities.
 
 In the Atlas UI, create this index on your `docs_content` collection:
 
-**📘 [Guía Visual Paso a Paso →](./docs/ATLAS_SETUP_GUIDE.md)**
+**📘 [Visual Step-by-Step Guide →](./docs/ATLAS_SETUP_GUIDE.md)**
 
-**Configuración JSON:**
+**JSON Configuration:**
 
 ```json
 {
@@ -75,21 +75,21 @@ In the Atlas UI, create this index on your `docs_content` collection:
 
 ### 3. Verify Index Creation
 
-**Opción A: Usar archivo .env (recomendado)**
+**Option A: Use .env file (recommended)**
 
-Crea `sdk/examples/docs-rag/.env`:
+Create `sdk/examples/docs-rag/.env`:
 ```env
 MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/
 OPENAI_API_KEY=sk-proj-xxxxx
 ```
 
-Luego ejecuta:
+Then run:
 ```bash
 cd sdk/examples/docs-rag
 npx tsx verify-index.ts
 ```
 
-**Opción B: Variables de entorno en terminal**
+**Option B: Environment variables in terminal**
 
 ```bash
 cd sdk/examples/docs-rag
@@ -98,31 +98,31 @@ export OPENAI_API_KEY="sk-..."
 npx tsx verify-index.ts
 ```
 
-El script verificará:
-- ✅ Conexión a MongoDB
-- ✅ Existencia de la colección
-- ✅ Estado del índice vectorial
+The script will verify:
+- ✅ Connection to MongoDB
+- ✅ Collection existence
+- ✅ Vector index status
 
 ### 4. Test the Plugin
 
-Con `.env` ya configurado:
+With `.env` already configured:
 ```bash
 cd sdk/examples/docs-rag
 npx tsx test-plugin.ts
 ```
 
-O con variables de entorno:
+Or with environment variables:
 ```bash
 export MONGODB_URI="mongodb+srv://..."
 export OPENAI_API_KEY="sk-..."
 pnpm test-plugin
 ```
 
-Este script:
-- Ingiere un documento de ejemplo
-- Realiza búsquedas de prueba
-- Muestra estadísticas de cache
-- Verifica la persistencia
+This script:
+- Ingests a sample document
+- Performs test searches
+- Shows cache statistics
+- Verifies persistence
 
 ## Quick Start
 
@@ -231,11 +231,11 @@ const plugin = new DocsRAGPlugin({
   cache: {
     embeddings: {
       enabled: true,
-      ttl: 3600000,    // 1 hour
+      ttl: 3600000,     // 1 hour
       maxSize: 1000,
     },
   },
-  
+
   // Plugin priority
   priority: 100,
 });
@@ -405,30 +405,30 @@ new DocsRAGPlugin(config: DocsRAGConfig)
 ## Additional Documentation
 
 ### Getting Started
-- 🚀 **[QUICKSTART.md](./QUICKSTART.md)** - Setup completo desde cero (primera vez)
+- 🚀 **[QUICKSTART.md](./QUICKSTART.md)** - Complete setup from scratch (first time)
 
 ### Setup & Configuration
-- 📘 **[Atlas Setup Guide](./docs/ATLAS_SETUP_GUIDE.md)** - Guía visual paso a paso para crear el vector search index
-- 🔧 **[Troubleshooting Guide](./docs/TROUBLESHOOTING.md)** - Soluciones a problemas comunes
+- 📘 **[Atlas Setup Guide](./docs/ATLAS_SETUP_GUIDE.md)** - Visual step-by-step guide to create the vector search index
+- 🔧 **[Troubleshooting Guide](./docs/TROUBLESHOOTING.md)** - Solutions to common problems
 
 ### Scripts & Examples
 
-Los ejemplos están en el monorepo:
-- 📁 **[sdk/examples/docs-rag/](../../../sdk/examples/docs-rag/)** - Ejemplos completos de uso
-- ✅ **[verify-index.ts](../../../sdk/examples/docs-rag/verify-index.ts)** - Verificar configuración de MongoDB
-- 🧪 **[test-plugin.ts](../../../sdk/examples/docs-rag/test-plugin.ts)** - Test completo con ingestion y búsqueda
-- 📄 **[ingest-pdf.ts](../../../sdk/examples/docs-rag/ingest-pdf.ts)** - Ejemplo de ingesta de PDFs
-- 📄 **[ingest-docx.ts](../../../sdk/examples/docs-rag/ingest-docx.ts)** - Ejemplo de ingesta de DOCX
-- 🌐 **[ingest-html.ts](../../../sdk/examples/docs-rag/ingest-html.ts)** - Ejemplo de ingesta de HTML
-- 💻 **[ingest-code.ts](../../../sdk/examples/docs-rag/ingest-code.ts)** - Ejemplo de ingesta de código fuente
+Examples are in the monorepo:
+- 📁 **[sdk/examples/docs-rag/](../../../sdk/examples/docs-rag/)** - Complete usage examples
+- ✅ **[verify-index.ts](../../../sdk/examples/docs-rag/verify-index.ts)** - Verify MongoDB configuration
+- 🧪 **[test-plugin.ts](../../../sdk/examples/docs-rag/test-plugin.ts)** - Full test with ingestion and search
+- 📄 **[ingest-pdf.ts](../../../sdk/examples/docs-rag/ingest-pdf.ts)** - PDF ingestion example
+- 📄 **[ingest-docx.ts](../../../sdk/examples/docs-rag/ingest-docx.ts)** - DOCX ingestion example
+- 🌐 **[ingest-html.ts](../../../sdk/examples/docs-rag/ingest-html.ts)** - HTML ingestion example
+- 💻 **[ingest-code.ts](../../../sdk/examples/docs-rag/ingest-code.ts)** - Source code ingestion example
 
 ### Quick Commands
 ```bash
-# Verificar configuración
+# Verify configuration
 cd sdk/examples/docs-rag
 npx tsx verify-index.ts
 
-# Probar plugin completo
+# Test complete plugin
 npx tsx test-plugin.ts
 ```
 
