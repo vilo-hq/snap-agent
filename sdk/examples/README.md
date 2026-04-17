@@ -382,6 +382,92 @@ await agent.bulkDocumentOperations([
 
 ---
 
+### docs-rag/
+
+**Purpose:** Documentation RAG plugin examples with multiple document formats
+
+**Location:** `sdk/examples/docs-rag/` (subdirectory with dedicated README)
+
+**Features:**
+- MongoDB persistent storage with Atlas Vector Search
+- Multiple document format support (PDF, DOCX, HTML, code, markdown)
+- Smart chunking strategies (markdown-aware, paragraph, sentence, fixed)
+- OpenAI embeddings with caching
+- Multi-tenant and multi-agent support
+- Vector search with similarity filtering
+- Index verification and diagnostics
+
+**Available Examples:**
+
+| Script | Purpose | Document Format |
+|--------|---------|-----------------|
+| `verify-index.ts` | Verify MongoDB Atlas setup | N/A |
+| `test-plugin.ts` | Complete test with sample doc | Markdown |
+| `ingest-pdf.ts` | Ingest PDF documents | PDF |
+| `ingest-docx.ts` | Ingest Word documents | DOCX |
+| `ingest-html.ts` | Ingest HTML/web pages | HTML |
+| `ingest-code.ts` | Ingest code repositories | Source code |
+
+**Prerequisites:**
+1. MongoDB Atlas cluster (M10+ tier for vector search)
+2. Vector search index created (see setup guide)
+3. OpenAI API key
+4. Monorepo dependencies installed (`pnpm install` from root)
+
+**Note:** These examples import directly from the plugin source code (`../../../plugins/rag/docs/src/`) rather than the published package, so no separate plugin installation is needed.
+
+**Setup:**
+```bash
+cd sdk/examples/docs-rag
+
+# Create .env file
+cp .env.example .env
+# Edit .env with your credentials
+
+# Verify setup
+npx tsx verify-index.ts
+```
+
+**Run Examples:**
+```bash
+cd sdk/examples/docs-rag
+
+# Test basic functionality
+npx tsx test-plugin.ts
+
+# Ingest PDF document
+pnpm add pdf-parse -D @types/pdf-parse
+npx tsx ingest-pdf.ts path/to/document.pdf
+
+# Ingest Word document
+pnpm add mammoth
+npx tsx ingest-docx.ts path/to/document.docx
+
+# Ingest web page
+pnpm add cheerio html-to-text
+npx tsx ingest-html.ts https://docs.example.com
+
+# Ingest code repository
+npx tsx ingest-code.ts /path/to/codebase
+```
+
+**Documentation:**
+- [Complete Guide](./docs-rag/README.md) - Full documentation for all examples
+- [Plugin README](../../plugins/rag/docs/README.md) - Plugin API reference
+- [Atlas Setup Guide](../../plugins/rag/docs/ATLAS_SETUP_GUIDE.md) - Visual MongoDB setup
+- [Troubleshooting](../../plugins/rag/docs/TROUBLESHOOTING.md) - Common issues
+- [Supported Formats](../../plugins/rag/docs/SUPPORTED_FORMATS.md) - Document format details
+
+**Use Case:**
+- Technical documentation search
+- Code search and discovery
+- Knowledge base systems
+- Document management systems
+- Multi-format content ingestion
+- Semantic search over documentation
+
+---
+
 ## Installation
 
 Install dependencies for all examples:

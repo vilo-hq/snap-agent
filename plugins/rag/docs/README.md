@@ -2,20 +2,127 @@
 
 Documentation RAG plugin for SnapAgent SDK - Semantic search over markdown, code, and technical documentation.
 
+> 🚀 **Primera vez?** Ver [QUICKSTART.md](./QUICKSTART.md) para setup completo paso a paso.
+
 ## Features
 
 - **Smart Chunking** - Markdown-aware, paragraph, sentence, or fixed-size strategies
 - **Code-Aware** - Extracts and indexes code blocks with language detection
 - **Section Hierarchy** - Preserves heading structure for context
 - **Semantic Search** - OpenAI embeddings for natural language queries
-- **In-Memory** - Fast, zero-config storage
-- **Similarity Filtering** - Configurable minimum score threshold  
+- **MongoDB Storage** - Persistent vector storage with Atlas Search
+- **Embedding Cache** - Reduces API costs and improves performance
+- **Similarity Filtering** - Configurable minimum score threshold
 
 ## Installation
 
 ```bash
-npm install @snap-agent/rag-docs @snap-agent/core
+npm install @snap-agent/rag-docs @snap-agent/core mongodb
 ```
+
+## MongoDB Setup
+
+This plugin requires MongoDB Atlas with vector search capabilities.
+
+### 1. Create a MongoDB Atlas Cluster
+
+1. Sign up at [MongoDB Atlas](https://www.mongodb.com/cloud/atlas)
+2. Create a cluster (M10+ recommended for vector search)
+3. Get your connection string
+
+### 2. Create Vector Search Index
+
+In the Atlas UI, create this index on your `docs_content` collection:
+
+**📘 [Guía Visual Paso a Paso →](./docs/ATLAS_SETUP_GUIDE.md)**
+
+**Configuración JSON:**
+
+```json
+{
+  "name": "docs_vector_index",
+  "type": "vectorSearch",
+  "definition": {
+    "fields": [
+      {
+        "type": "vector",
+        "path": "embedding",
+        "numDimensions": 1536,
+        "similarity": "cosine"
+      },
+      {
+        "type": "filter",
+        "path": "tenantId"
+      },
+      {
+        "type": "filter",
+        "path": "agentId"
+      },
+      {
+        "type": "filter",
+        "path": "metadata.type"
+      },
+      {
+        "type": "filter",
+        "path": "metadata.section"
+      }
+    ]
+  }
+}
+```
+
+**Note:** If using `text-embedding-3-large`, change `numDimensions` to `3072`.
+
+### 3. Verify Index Creation
+
+**Opción A: Usar archivo .env (recomendado)**
+
+Crea `sdk/examples/docs-rag/.env`:
+```env
+MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/
+OPENAI_API_KEY=sk-proj-xxxxx
+```
+
+Luego ejecuta:
+```bash
+cd sdk/examples/docs-rag
+npx tsx verify-index.ts
+```
+
+**Opción B: Variables de entorno en terminal**
+
+```bash
+cd sdk/examples/docs-rag
+export MONGODB_URI="your-connection-string"
+export OPENAI_API_KEY="sk-..."
+npx tsx verify-index.ts
+```
+
+El script verificará:
+- ✅ Conexión a MongoDB
+- ✅ Existencia de la colección
+- ✅ Estado del índice vectorial
+
+### 4. Test the Plugin
+
+Con `.env` ya configurado:
+```bash
+cd sdk/examples/docs-rag
+npx tsx test-plugin.ts
+```
+
+O con variables de entorno:
+```bash
+export MONGODB_URI="mongodb+srv://..."
+export OPENAI_API_KEY="sk-..."
+pnpm test-plugin
+```
+
+Este script:
+- Ingiere un documento de ejemplo
+- Realiza búsquedas de prueba
+- Muestra estadísticas de cache
+- Verifica la persistencia
 
 ## Quick Start
 
@@ -37,6 +144,12 @@ const agent = await client.createAgent({
   userId: 'user-123',
   plugins: [
     new DocsRAGPlugin({
+      // MongoDB connection
+      mongoUri: process.env.MONGODB_URI!,
+      dbName: 'my_docs',
+      tenantId: 'my-company',
+      
+      // Embeddings
       embeddingProviderApiKey: process.env.OPENAI_API_KEY!,
       chunkingStrategy: 'markdown',
     }),
@@ -82,12 +195,22 @@ const response = await client.chat({
 
 ```typescript
 const plugin = new DocsRAGPlugin({
+  // MongoDB (required)
+  mongoUri: process.env.MONGODB_URI!,
+  dbName: 'my_docs',
+  collection: 'docs_content',        // Default: 'docs_content'
+  tenantId: 'my-company',            // Required for multi-tenancy
+
   // Required
   embeddingProviderApiKey: process.env.OPENAI_API_KEY!,
 
   // Embedding Provider (optional)
   embeddingProvider: 'openai',  // 'openai' | 'voyage' (default: 'openai')
   embeddingModel: 'text-embedding-3-small', // Model to use
+
+  // Vector Search
+  vectorIndexName: 'docs_vector_index',  // Atlas Search index name
+  numCandidates: 100,                    // Candidates for vector search
 
   // Chunking
   chunkingStrategy: 'markdown', // 'markdown' | 'paragraph' | 'sentence' | 'fixed'
@@ -100,6 +223,21 @@ const plugin = new DocsRAGPlugin({
 
   // Options
   includeCode: true,            // Index code blocks
+  
+  // Filterable fields for MongoDB indexing
+  filterableFields: ['type', 'section', 'language'],
+  
+  // Embedding cache (recommended)
+  cache: {
+    embeddings: {
+      enabled: true,
+      ttl: 3600000,    // 1 hour
+      maxSize: 1000,
+    },
+  },
+  
+  // Plugin priority
+  priority: 100,
 });
 ```
 
@@ -250,8 +388,11 @@ new DocsRAGPlugin(config: DocsRAGConfig)
 | `update(id, document, options)` | Update a document |
 | `delete(ids, options)` | Remove documents |
 | `getStats()` | Get indexing statistics |
+| `getCacheStats()` | Get embedding cache stats |
+| `clearCache()` | Clear embedding cache |
 | `clearAgent(agentId)` | Clear agent's data |
-| `clearAll()` | Clear all data |
+| `clearAll()` | Clear all tenant data |
+| `disconnect()` | Close MongoDB connection |
 
 ## Use Cases
 
@@ -260,6 +401,36 @@ new DocsRAGPlugin(config: DocsRAGConfig)
 - **Knowledge Bases** - Company wikis and internal docs
 - **Code References** - Search code examples and snippets
 - **FAQs** - Question-answer retrieval
+
+## Additional Documentation
+
+### Getting Started
+- 🚀 **[QUICKSTART.md](./QUICKSTART.md)** - Setup completo desde cero (primera vez)
+
+### Setup & Configuration
+- 📘 **[Atlas Setup Guide](./docs/ATLAS_SETUP_GUIDE.md)** - Guía visual paso a paso para crear el vector search index
+- 🔧 **[Troubleshooting Guide](./docs/TROUBLESHOOTING.md)** - Soluciones a problemas comunes
+
+### Scripts & Examples
+
+Los ejemplos están en el monorepo:
+- 📁 **[sdk/examples/docs-rag/](../../../sdk/examples/docs-rag/)** - Ejemplos completos de uso
+- ✅ **[verify-index.ts](../../../sdk/examples/docs-rag/verify-index.ts)** - Verificar configuración de MongoDB
+- 🧪 **[test-plugin.ts](../../../sdk/examples/docs-rag/test-plugin.ts)** - Test completo con ingestion y búsqueda
+- 📄 **[ingest-pdf.ts](../../../sdk/examples/docs-rag/ingest-pdf.ts)** - Ejemplo de ingesta de PDFs
+- 📄 **[ingest-docx.ts](../../../sdk/examples/docs-rag/ingest-docx.ts)** - Ejemplo de ingesta de DOCX
+- 🌐 **[ingest-html.ts](../../../sdk/examples/docs-rag/ingest-html.ts)** - Ejemplo de ingesta de HTML
+- 💻 **[ingest-code.ts](../../../sdk/examples/docs-rag/ingest-code.ts)** - Ejemplo de ingesta de código fuente
+
+### Quick Commands
+```bash
+# Verificar configuración
+cd sdk/examples/docs-rag
+npx tsx verify-index.ts
+
+# Probar plugin completo
+npx tsx test-plugin.ts
+```
 
 ## License
 
