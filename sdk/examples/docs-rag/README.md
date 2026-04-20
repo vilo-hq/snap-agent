@@ -49,6 +49,43 @@ Esto:
 - ✅ Muestra estadísticas de caché
 - ✅ Verifica persistencia
 
+### 3. Persistencia de Agentes (End-to-End)
+
+Verifica que DocsRAGPlugin implementa correctamente `getConfig()` para la persistencia:
+
+```bash
+cd sdk/examples/docs-rag
+npx tsx agent-persistence.ts
+```
+
+**Este ejemplo verifica:**
+- ✅ DocsRAGPlugin tiene método `getConfig()`
+- ✅ La configuración es serializable a JSON
+- ✅ Valores sensibles usan referencias a env vars (ej: `${MONGODB_URI}`)
+- ✅ PluginRegistry puede re-instanciar el plugin desde config guardada
+- ✅ El plugin funciona correctamente con un agente
+- ✅ La configuración se guarda en MongoDB
+
+**Proceso de verificación:**
+1. Crea una instancia de `DocsRAGPlugin`
+2. Llama a `getConfig()` para obtener la configuración serializable
+3. Verifica que valores sensibles usan referencias a env vars
+4. Registra el plugin en `PluginRegistry`
+5. Simula re-instanciación desde config guardada
+6. Crea un agente con el plugin
+7. Verifica que el plugin funciona (ingest y search)
+
+**Qué demuestra esto:**
+Cuando recargues un agente desde MongoDB, el SDK:
+1. Lee el array `pluginConfigs` de la base de datos
+2. Para cada config, llama `pluginRegistry.instantiate(config)`
+3. El registry resuelve las env vars (ej: `${MONGODB_URI}` → URI real)
+4. Llama a la factory function con la config resuelta
+5. La factory crea una nueva instancia del plugin
+6. El agente recargado funciona con los plugins re-instanciados
+
+> 💡 Este ejemplo prueba que el bug de persistencia está **resuelto** para DocsRAGPlugin, EcommerceRAGPlugin y SupportRAGPlugin (todos tienen `getConfig()`).
+
 ---
 
 ## 📄 Ejemplos por Formato
@@ -156,6 +193,7 @@ sdk/examples/docs-rag/
 ├── README.md            # Esta guía
 ├── verify-index.ts      # Verificar MongoDB setup
 ├── test-plugin.ts       # Test básico completo
+├── agent-persistence.ts # ⭐ Flujo completo de persistencia (E2E)
 ├── ingest-pdf.ts        # Ejemplo PDF
 ├── ingest-docx.ts       # Ejemplo DOCX
 ├── ingest-html.ts       # Ejemplo HTML/Web
