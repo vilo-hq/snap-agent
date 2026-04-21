@@ -29,13 +29,13 @@ import { DocsRAGPlugin } from '../../../plugins/rag/docs/src';
 config({ path: resolve(__dirname, '.env') });
 
 async function testPluginPersistence() {
-  console.log('🚀 Verificando getConfig() en DocsRAGPlugin\n');
+  console.log('🚀 Verifying getConfig() in DocsRAGPlugin\n');
 
   // Validate environment variables
   if (!process.env.MONGODB_URI || !process.env.OPENAI_API_KEY) {
-    console.error('❌ Error: Variables de entorno no configuradas\n');
-    console.log('📁 Crea el archivo .env en: sdk/examples/docs-rag/.env');
-    console.log('\nEjemplo:');
+    console.error('❌ Error: Environment variables not configured\n');
+    console.log('📁 Create the .env file at: sdk/examples/docs-rag/.env');
+    console.log('\nExample:');
     console.log('MONGODB_URI="mongodb+srv://username:password@cluster.mongodb.net/"');
     console.log('MONGODB_DB="my_docs"');
     console.log('OPENAI_API_KEY="sk-proj-xxxxx"\n');
@@ -48,7 +48,7 @@ async function testPluginPersistence() {
 
   try {
     // 1. Create the plugin
-    console.log('📝 Creando DocsRAGPlugin...');
+    console.log('📝 Creating DocsRAGPlugin...');
     const plugin = new DocsRAGPlugin({
       mongoUri,
       dbName,
@@ -65,23 +65,23 @@ async function testPluginPersistence() {
         },
       },
     });
-    console.log('✅ Plugin creado\n');
+    console.log('✅ Plugin created\n');
 
     // 2. Verify that getConfig() exists
-    console.log('🔍 Verificando getConfig()...');
+    console.log('🔍 Verifying getConfig()...');
     if (typeof plugin.getConfig !== 'function') {
-      console.error('❌ ERROR: El plugin NO tiene método getConfig()');
+      console.error('❌ ERROR: The plugin does NOT have a getConfig() method');
       process.exit(1);
     }
-    console.log('✅ Método getConfig() existe\n');
+    console.log('✅ getConfig() method exists\n');
 
     // 3. Get the serializable configuration
-    console.log('📋 Obteniendo configuración serializable...');
+    console.log('📋 Getting serializable configuration...');
     const pluginConfig = plugin.getConfig();
-    console.log('✅ Configuración obtenida\n');
+    console.log('✅ Configuration retrieved\n');
 
     // 4. Verify config structure
-    console.log('🔍 Verificando estructura de la configuración:');
+    console.log('🔍 Verifying configuration structure:');
     console.log('   ├─ mongoUri:', pluginConfig.mongoUri);
     console.log('   ├─ dbName:', pluginConfig.dbName);
     console.log('   ├─ collection:', pluginConfig.collection);
@@ -96,50 +96,50 @@ async function testPluginPersistence() {
     console.log();
 
     // 5. Verify that sensitive values are NOT exposed
-    console.log('🔒 Verificando seguridad de valores sensibles...');
+    console.log('🔒 Verifying sensitive value security...');
     const sensitiveChecks = {
       mongoUri: pluginConfig.mongoUri === '${MONGODB_URI}',
       apiKey: pluginConfig.embeddingProviderApiKey?.match(/^\$\{.+\}$/) !== null,
     };
 
     if (sensitiveChecks.mongoUri && sensitiveChecks.apiKey) {
-      console.log('   ✅ mongoUri usa referencia a env var: ${MONGODB_URI}');
-      console.log('   ✅ embeddingProviderApiKey usa referencia a env var');
+      console.log('   ✅ mongoUri uses env var reference: ${MONGODB_URI}');
+      console.log('   ✅ embeddingProviderApiKey uses env var reference');
     } else {
-      console.error('   ❌ ERROR: Valores sensibles expuestos directamente');
+      console.error('   ❌ ERROR: Sensitive values exposed directly');
       if (!sensitiveChecks.mongoUri) {
-        console.error('      - mongoUri NO usa referencia a env var');
+        console.error('      - mongoUri does NOT use env var reference');
       }
       if (!sensitiveChecks.apiKey) {
-        console.error('      - embeddingProviderApiKey NO usa referencia a env var');
+        console.error('      - embeddingProviderApiKey does NOT use env var reference');
       }
       process.exit(1);
     }
     console.log();
 
     // 6. Verify that it is JSON serializable
-    console.log('📦 Verificando serialización JSON...');
+    console.log('📦 Verifying JSON serialization...');
     try {
       const json = JSON.stringify(pluginConfig);
       const parsed = JSON.parse(json);
-      console.log('   ✅ La configuración es JSON-serializable');
-      console.log('   ✅ Tamaño serializado:', json.length, 'bytes');
+      console.log('   ✅ Configuration is JSON-serializable');
+      console.log('   ✅ Serialized size:', json.length, 'bytes');
     } catch (error) {
-      console.error('   ❌ ERROR: La configuración NO es JSON-serializable');
+      console.error('   ❌ ERROR: Configuration is NOT JSON-serializable');
       console.error('   ', error);
       process.exit(1);
     }
     console.log();
 
     // 7. Register in PluginRegistry (simulates what the SDK does)
-    console.log('📋 Registrando plugin en PluginRegistry...');
+    console.log('📋 Registering plugin in PluginRegistry...');
     pluginRegistry.register('docs-rag', (config: any) => {
       return new DocsRAGPlugin(config as any);
     });
-    console.log('   ✅ Plugin registrado exitosamente\n');
+    console.log('   ✅ Plugin registered successfully\n');
 
     // 8. Simulate re-instantiation from stored config
-    console.log('🔄 Simulando re-instanciación desde config guardada...');
+    console.log('🔄 Simulating re-instantiation from stored config...');
     const storedConfig = {
       type: 'rag' as const,
       name: 'docs-rag',
@@ -150,14 +150,14 @@ async function testPluginPersistence() {
 
     // The registry resolves environment variable references
     const reinstantiatedPlugin = await pluginRegistry.instantiate(storedConfig);
-    console.log('   ✅ Plugin re-instanciado exitosamente');
-    console.log('   ├─ Tipo:', reinstantiatedPlugin.type);
-    console.log('   ├─ Nombre:', reinstantiatedPlugin.name);
+    console.log('   ✅ Plugin re-instantiated successfully');
+    console.log('   ├─ Type:', reinstantiatedPlugin.type);
+    console.log('   ├─ Name:', reinstantiatedPlugin.name);
     console.log('   └─ Priority:', reinstantiatedPlugin.priority);
     console.log();
 
     // 9. Create an agent with the plugin (uses the client API)
-    console.log('🤖 Creando agente con DocsRAGPlugin...');
+    console.log('🤖 Creating agent with DocsRAGPlugin...');
     const client = createClient({
       storage: new MongoDBStorage({
         uri: mongoUri,
@@ -170,18 +170,18 @@ async function testPluginPersistence() {
 
     const agent = await client.createAgent({
       name: 'Docs Assistant',
-      description: 'Asistente con DocsRAGPlugin',
-      instructions: 'Eres un asistente experto en documentación.',
+      description: 'Assistant with DocsRAGPlugin',
+      instructions: 'You are an expert documentation assistant.',
       model: 'gpt-4o-mini',
       userId: 'test-user',
       plugins: [plugin],
     });
 
-    console.log(`   ✅ Agente creado: ${agent.id}`);
-    console.log('   ✅ Configuración del plugin guardada en MongoDB\n');
+    console.log(`   ✅ Agent created: ${agent.id}`);
+    console.log('   ✅ Plugin configuration saved in MongoDB\n');
 
     // 10. Ingest a test document
-    console.log('📚 Ingiriendo documento de ejemplo...');
+    console.log('📚 Ingesting example document...');
     const testDoc = {
       id: 'test-doc-persistence',
       content: `# Test Document
@@ -196,29 +196,29 @@ Content here.`,
     };
 
     const ingestResult = await plugin.ingest([testDoc], { agentId: 'shared' });
-    console.log(`   ✅ Documento ingerido: ${ingestResult.indexed} documento(s)`);
-    console.log(`   Chunks generados: ${ingestResult.metadata?.totalChunks || 'N/A'}\n`);
+    console.log(`   ✅ Document ingested: ${ingestResult.indexed} document(s)`);
+    console.log(`   Generated chunks: ${ingestResult.metadata?.totalChunks || 'N/A'}\n`);
 
     // Cleanup
     await plugin.disconnect();
 
-    console.log('✅ ¡VERIFICACIÓN EXITOSA!\n');
-    console.log('Resultados:');
-    console.log('   1. ✅ DocsRAGPlugin implementa getConfig()');
-    console.log('   2. ✅ Configuración se serializa correctamente');
-    console.log('   3. ✅ Valores sensibles usan referencias a env vars');
-    console.log('   4. ✅ Plugin es JSON-serializable');
-    console.log('   5. ✅ PluginRegistry puede re-instanciar el plugin');
-    console.log('   6. ✅ Plugin funciona en un agente');
-    console.log('   7. ✅ Configuración se guarda en MongoDB\n');
+    console.log('✅ VERIFICATION SUCCESSFUL!\n');
+    console.log('Results:');
+    console.log('   1. ✅ DocsRAGPlugin implements getConfig()');
+    console.log('   2. ✅ Configuration serializes correctly');
+    console.log('   3. ✅ Sensitive values use env var references');
+    console.log('   4. ✅ Plugin is JSON-serializable');
+    console.log('   5. ✅ PluginRegistry can re-instantiate the plugin');
+    console.log('   6. ✅ Plugin works in an agent');
+    console.log('   7. ✅ Configuration is saved in MongoDB\n');
 
-    console.log('💡 El bug de persistencia está RESUELTO\n');
-    console.log('   Al recargar el agente desde MongoDB, el SDK usará');
-    console.log('   PluginRegistry para re-instanciar el plugin desde');
-    console.log('   la configuración guardada en pluginConfigs.\n');
+    console.log('💡 The persistence bug is RESOLVED\n');
+    console.log('   When reloading the agent from MongoDB, the SDK will use');
+    console.log('   PluginRegistry to re-instantiate the plugin from');
+    console.log('   the configuration saved in pluginConfigs.\n');
 
   } catch (error) {
-    console.error('\n❌ Error durante la prueba:', error);
+    console.error('\n❌ Error during test:', error);
     if (error instanceof Error) {
       console.error('   Stack:', error.stack);
     }

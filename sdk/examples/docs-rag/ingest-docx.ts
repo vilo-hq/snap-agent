@@ -1,10 +1,10 @@
 /**
- * Ejemplo: Ingerir documentos DOCX en DocsRAGPlugin
+ * Example: Ingest DOCX documents into DocsRAGPlugin
  * 
- * Requiere instalar:
+ * Requires installing:
  * pnpm add mammoth
  * 
- * Uso:
+ * Usage:
  * cd sdk/examples/docs-rag
  * npx tsx ingest-docx.ts path/to/document.docx
  */
@@ -14,29 +14,29 @@ import { resolve } from 'path';
 import mammoth from 'mammoth';
 import { DocsRAGPlugin } from '../../../plugins/rag/docs/src/DocsRAGPlugin';
 
-// Cargar .env desde este directorio
+// Load .env from this directory
 config({ path: resolve(__dirname, '.env') });
 
 async function ingestDocx(docxPath: string) {
-  console.log('📄 Extrayendo texto de DOCX...\n');
+  console.log('📄 Extracting text from DOCX...\n');
 
-  // 1. Leer archivo DOCX
-  // extractRawText - solo texto plano
-  // convertToMarkdown - convierte a Markdown (preserva formato)
+  // 1. Read DOCX file
+  // extractRawText - plain text only
+  // convertToMarkdown - converts to Markdown (preserves formatting)
   const result = await mammoth.convertToMarkdown({ path: docxPath });
   
-  console.log(`📝 Caracteres: ${result.value.length}`);
+  console.log(`📝 Characters: ${result.value.length}`);
   if (result.messages.length > 0) {
-    console.log(`⚠️  Advertencias: ${result.messages.length}\n`);
+    console.log(`⚠️  Warnings: ${result.messages.length}\n`);
   }
 
-  // 2. Crear plugin
+  // 2. Create plugin
   const plugin = new DocsRAGPlugin({
     mongoUri: process.env.MONGODB_URI!,
     dbName: process.env.MONGODB_DB || 'my_docs',
     tenantId: 'test-tenant',
     embeddingProviderApiKey: process.env.OPENAI_API_KEY!,
-    chunkingStrategy: 'markdown',  // Usar markdown si convertimos con mammoth
+    chunkingStrategy: 'markdown',  // Use markdown when converting with mammoth
     maxChunkSize: 1500,
     cache: {
       embeddings: {
@@ -48,10 +48,10 @@ async function ingestDocx(docxPath: string) {
   });
 
   try {
-    // 3. Ingerir el contenido del DOCX
+    // 3. Ingest DOCX content
     const filename = docxPath.split('/').pop() || docxPath.split('\\').pop() || docxPath;
     
-    console.log('📦 Ingiriendo en MongoDB...');
+    console.log('📦 Ingesting into MongoDB...');
     const ingestResult = await plugin.ingest([
       {
         id: `docx-${Date.now()}`,
@@ -66,20 +66,20 @@ async function ingestDocx(docxPath: string) {
     ], { agentId: 'docx-agent' });
 
     if (ingestResult.success) {
-      console.log(`✅ DOCX ingerido exitosamente!`);
-      console.log(`   Documentos: ${ingestResult.indexed}`);
-      console.log(`   Estrategia: ${ingestResult.metadata?.strategy}\n`);
+      console.log(`✅ DOCX ingested successfully!`);
+      console.log(`   Documents: ${ingestResult.indexed}`);
+      console.log(`   Strategy: ${ingestResult.metadata?.strategy}\n`);
     }
 
-    // 4. Probar búsqueda
-    console.log('🔍 Probando búsqueda...');
+    // 4. Test search
+    console.log('🔍 Testing search...');
     const context = await plugin.retrieveContext(
       'What is this document about?',
       { agentId: 'docx-agent' }
     );
 
-    console.log(`   Resultados: ${context.metadata?.count}`);
-    console.log(`   Score promedio: ${context.metadata?.avgScore?.toFixed(3)}\n`);
+    console.log(`   Results: ${context.metadata?.count}`);
+    console.log(`   Average score: ${context.metadata?.avgScore?.toFixed(3)}\n`);
 
   } catch (error) {
     console.error('❌ Error:', error);
@@ -92,8 +92,8 @@ async function ingestDocx(docxPath: string) {
 const docxPath = process.argv[2];
 
 if (!docxPath) {
-  console.error('❌ Error: Proporciona la ruta al archivo DOCX');
-  console.log('\nUso:');
+  console.error('❌ Error: Provide the path to the DOCX file');
+  console.log('\nUsage:');
   console.log('  cd sdk/examples/docs-rag');
   console.log('  npx tsx ingest-docx.ts path/to/document.docx');
   process.exit(1);
