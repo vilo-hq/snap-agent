@@ -1,14 +1,14 @@
 /**
- * Ejemplo: Ingerir contenido HTML en DocsRAGPlugin
+ * Example: Ingest HTML content into DocsRAGPlugin
  * 
- * Requiere instalar:
+ * Requires installing:
  * pnpm add cheerio html-to-text
  * 
- * Uso como URL:
+ * Usage as URL:
  * cd sdk/examples/docs-rag
  * npx tsx ingest-html.ts https://example.com/docs/page
  * 
- * Uso como archivo:
+ * Usage as file:
  * npx tsx ingest-html.ts path/to/file.html
  */
 
@@ -19,39 +19,39 @@ import * as cheerio from 'cheerio';
 import { convert } from 'html-to-text';
 import { DocsRAGPlugin } from '../../../plugins/rag/docs/src/DocsRAGPlugin';
 
-// Cargar .env desde este directorio
+// Load .env from this directory
 config({ path: resolve(__dirname, '.env') });
 
 async function ingestHTML(source: string) {
-  console.log('🌐 Procesando HTML...\n');
+  console.log('🌐 Processing HTML...\n');
 
   let html: string;
   let sourceType: 'file' | 'url';
   let title: string;
 
-  // 1. Determinar si es URL o archivo
+  // 1. Determine if it is a URL or file
   if (source.startsWith('http://') || source.startsWith('https://')) {
     sourceType = 'url';
-    console.log(`📥 Descargando desde: ${source}`);
+    console.log(`📥 Downloading from: ${source}`);
     const response = await fetch(source);
     html = await response.text();
     title = new URL(source).pathname;
   } else {
     sourceType = 'file';
     if (!existsSync(source)) {
-      throw new Error(`Archivo no encontrado: ${source}`);
+      throw new Error(`File not found: ${source}`);
     }
-    console.log(`📄 Leyendo archivo: ${source}`);
+    console.log(`📄 Reading file: ${source}`);
     html = readFileSync(source, 'utf-8');
     title = source.split('/').pop()?.replace('.html', '') || 
             source.split('\\').pop()?.replace('.html', '') || 
             'document';
   }
 
-  // 2. Usar Cheerio para extraer contenido limpio
+  // 2. Use Cheerio to extract clean content
   const $ = cheerio.load(html);
   
-  // Remover elementos no deseados
+  // Remove unwanted elements
   $('script').remove();
   $('style').remove();
   $('nav').remove();
@@ -59,10 +59,10 @@ async function ingestHTML(source: string) {
   $('.sidebar').remove();
   $('.advertisement').remove();
   
-  // Extraer título si existe
+  // Extract title if it exists
   const pageTitle = $('title').text() || $('h1').first().text() || title;
   
-  // Obtener contenido principal (intenta encontrar el contenedor principal)
+  // Get main content (tries to find the main container)
   const mainContent = 
     $('main').html() || 
     $('article').html() || 
@@ -71,7 +71,7 @@ async function ingestHTML(source: string) {
     $('body').html() || 
     '';
 
-  // 3. Convertir HTML a texto plano (con formato)
+  // 3. Convert HTML to plain text (with formatting)
   const plainText = convert(mainContent, {
     wordwrap: false,
     selectors: [
@@ -83,7 +83,7 @@ async function ingestHTML(source: string) {
   console.log(`📝 Título: ${pageTitle}`);
   console.log(`📏 Caracteres: ${plainText.length}\n`);
 
-  // 4. Crear plugin
+  // 4. Create plugin
   const plugin = new DocsRAGPlugin({
     mongoUri: process.env.MONGODB_URI!,
     dbName: process.env.MONGODB_DB || 'my_docs',
@@ -101,8 +101,8 @@ async function ingestHTML(source: string) {
   });
 
   try {
-    // 5. Ingerir el contenido
-    console.log('📦 Ingiriendo en MongoDB...');
+    // 5. Ingest content
+    console.log('📦 Ingesting into MongoDB...');
     const result = await plugin.ingest([
       {
         id: `html-${Date.now()}`,
@@ -119,23 +119,23 @@ async function ingestHTML(source: string) {
     ], { agentId: 'html-agent' });
 
     if (result.success) {
-      console.log(`✅ HTML ingerido exitosamente!`);
-      console.log(`   Documentos: ${result.indexed}`);
-      console.log(`   Estrategia: ${result.metadata?.strategy}\n`);
+      console.log(`✅ HTML ingested successfully!`);
+      console.log(`   Documents: ${result.indexed}`);
+      console.log(`   Strategy: ${result.metadata?.strategy}\n`);
     }
 
-    // 6. Probar búsqueda
-    console.log('🔍 Probando búsqueda...');
+    // 6. Test search
+    console.log('🔍 Testing search...');
     const context = await plugin.retrieveContext(
       'What is this page about?',
       { agentId: 'html-agent' }
     );
 
-    console.log(`   Resultados: ${context.metadata?.count}`);
-    console.log(`   Score promedio: ${context.metadata?.avgScore?.toFixed(3)}\n`);
+    console.log(`   Results: ${context.metadata?.count}`);
+    console.log(`   Average score: ${context.metadata?.avgScore?.toFixed(3)}\n`);
 
     if (context.content) {
-      console.log('📄 Contenido encontrado (preview):');
+      console.log('📄 Content found (preview):');
       console.log(context.content.slice(0, 300) + '...\n');
     }
 
@@ -150,8 +150,8 @@ async function ingestHTML(source: string) {
 const source = process.argv[2];
 
 if (!source) {
-  console.error('❌ Error: Proporciona una URL o ruta al archivo HTML');
-  console.log('\nUso:');
+  console.error('❌ Error: Provide a URL or path to the HTML file');
+  console.log('\nUsage:');
   console.log('  cd sdk/examples/docs-rag');
   console.log('  npx tsx ingest-html.ts https://example.com/docs');
   console.log('  npx tsx ingest-html.ts path/to/file.html');

@@ -1492,6 +1492,35 @@ export class EcommerceRAGPlugin implements RAGPlugin {
     await this.client.close();
     this.db = null;
   }
+
+  /**
+   * Get plugin configuration (for persistence)
+   * Returns serializable config with env var references for sensitive data
+   */
+  getConfig(): Record<string, any> {
+    return {
+      mongoUri: '${MONGODB_URI}',
+      dbName: this.config.dbName,
+      collection: this.config.collection,
+      tenantId: this.config.tenantId,
+      openaiApiKey: '${OPENAI_API_KEY}',
+      voyageApiKey: '${VOYAGE_API_KEY}',
+      embeddingModel: this.config.embeddingModel,
+      attributeList: this.config.attributeList,
+      enableAttributeExtraction: this.config.enableAttributeExtraction,
+      numCandidates: this.config.numCandidates,
+      limit: this.config.limit,
+      vectorIndexName: this.config.vectorIndexName,
+      rescoringWeights: this.config.rescoringWeights,
+      enableReranking: this.config.enableReranking,
+      rerankTopK: this.config.rerankTopK,
+      contextProductCount: this.config.contextProductCount,
+      language: this.config.language,
+      includeOutOfStock: this.config.includeOutOfStock,
+      cache: this.config.cache,
+      priority: this.priority,
+    };
+  }
 }
 
 

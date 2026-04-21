@@ -1,16 +1,16 @@
 /**
- * Script de ejemplo para probar DocsRAGPlugin con MongoDB
+ * Example script to test DocsRAGPlugin with MongoDB
  * 
- * Ubicación del .env:
+ * .env location:
  * sdk/examples/docs-rag/.env
  * 
- * Antes de ejecutar:
- * 1. Instala dependencias: pnpm install (en la raíz del monorepo)
- * 2. Crea el archivo .env en sdk/examples/docs-rag/
- * 3. Configura MONGODB_URI y OPENAI_API_KEY
- * 4. Crea el vector search index en Atlas
+ * Before running:
+ * 1. Install dependencies: pnpm install (at the monorepo root)
+ * 2. Create the .env file in sdk/examples/docs-rag/
+ * 3. Configure MONGODB_URI and OPENAI_API_KEY
+ * 4. Create the vector search index in Atlas
  * 
- * Uso desde la raíz del monorepo:
+ * Usage from the monorepo root:
  * cd sdk/examples/docs-rag
  * npx tsx test-plugin.ts
  */
@@ -19,17 +19,17 @@ import { config } from 'dotenv';
 import { resolve } from 'path';
 import { DocsRAGPlugin } from '../../../plugins/rag/docs/src/DocsRAGPlugin';
 
-// Cargar .env desde este directorio
+// Load .env from this directory
 config({ path: resolve(__dirname, '.env') });
 
 async function testDocsRAG() {
-  console.log('🚀 Probando DocsRAGPlugin con MongoDB\n');
+  console.log('🚀 Testing DocsRAGPlugin with MongoDB\n');
 
   // Validar variables de entorno
   if (!process.env.MONGODB_URI) {
-    console.error('❌ Error: MONGODB_URI no está configurado\n');
-    console.log('📁 Crea el archivo .env en: sdk/examples/docs-rag/.env');
-    console.log('\nEjemplo:');
+    console.error('❌ Error: MONGODB_URI is not configured\n');
+    console.log('📁 Create the .env file at: sdk/examples/docs-rag/.env');
+    console.log('\nExample:');
     console.log('MONGODB_URI="mongodb+srv://username:password@cluster.mongodb.net/"');
     console.log('MONGODB_DB="my_docs"');
     console.log('OPENAI_API_KEY="sk-proj-xxxxx"\n');
@@ -37,12 +37,12 @@ async function testDocsRAG() {
   }
 
   if (!process.env.OPENAI_API_KEY) {
-    console.error('❌ Error: OPENAI_API_KEY no está configurado\n');
-    console.log('📁 Crea el archivo .env en: sdk/examples/docs-rag/.env');
+    console.error('❌ Error: OPENAI_API_KEY is not configured\n');
+    console.log('📁 Create the .env file at: sdk/examples/docs-rag/.env');
     process.exit(1);
   }
 
-  // Crear plugin
+  // Create plugin
   const plugin = new DocsRAGPlugin({
     mongoUri: process.env.MONGODB_URI,
     dbName: process.env.MONGODB_DB || 'test_docs',
@@ -61,8 +61,8 @@ async function testDocsRAG() {
   });
 
   try {
-    // 1. Ingerir documento de ejemplo
-    console.log('📝 Ingiriendo documento de ejemplo...');
+    // 1. Ingest example document
+    console.log('📝 Ingesting example document...');
     
     const testDoc = {
       id: 'getting-started',
@@ -125,19 +125,19 @@ The API uses standard HTTP status codes:
     const result = await plugin.ingest([testDoc], { agentId: 'test-agent' });
     
     if (result.success) {
-      console.log(`✅ Documento ingerido: ${result.indexed} documento(s)`);
-      console.log(`   Estrategia: ${result.metadata?.strategy}`);
-      console.log(`   Chunks generados: ${result.metadata?.totalChunks || 'N/A'}\n`);
+      console.log(`✅ Document ingested: ${result.indexed} document(s)`);
+      console.log(`   Strategy: ${result.metadata?.strategy}`);
+      console.log(`   Generated chunks: ${result.metadata?.totalChunks || 'N/A'}\n`);
     } else {
-      console.log('❌ Error al ingerir:', result.errors);
+      console.log('❌ Error ingesting:', result.errors);
       return;
     }
 
-    // 2. Esperar un momento para que el índice se actualice
-    console.log('⏳ Esperando 2 segundos para indexación...\n');
+    // 2. Wait a moment for the index to update
+    console.log('⏳ Waiting 2 seconds for indexing...\n');
     await new Promise(resolve => setTimeout(resolve, 2000));
 
-    // 3. Hacer búsquedas de prueba
+    // 3. Run test queries
     const queries = [
       'How do I authenticate?',
       'Show me code examples for POST requests',
@@ -151,37 +151,37 @@ The API uses standard HTTP status codes:
         agentId: 'test-agent',
       });
 
-      console.log(`   Resultados: ${context.metadata?.count}`);
-      console.log(`   Score promedio: ${context.metadata?.avgScore?.toFixed(3)}`);
+      console.log(`   Results: ${context.metadata?.count}`);
+      console.log(`   Average score: ${context.metadata?.avgScore?.toFixed(3)}`);
       
       if (context.sources && context.sources.length > 0) {
-        console.log(`   Top resultado: ${context.sources[0].metadata?.title || 'N/A'}`);
+        console.log(`   Top result: ${context.sources[0].metadata?.title || 'N/A'}`);
         console.log(`   Score: ${context.sources[0].score.toFixed(3)}`);
       }
       console.log();
     }
 
-    // 4. Mostrar estadísticas de caché
+    // 4. Show cache statistics
     const cacheStats = plugin.getCacheStats();
     
-    console.log('📊 Estadísticas de caché de embeddings:');
+    console.log('📊 Embedding cache statistics:');
     console.log(`   Enabled: ${cacheStats.enabled}`);
     console.log(`   Hits: ${cacheStats.hits}`);
     console.log(`   Misses: ${cacheStats.misses}`);
     console.log(`   Cache size: ${cacheStats.size}`);
     console.log(`   Hit rate: ${((cacheStats.hitRate ?? 0) * 100).toFixed(1)}%`);
     
-    console.log('\n💡 Breakdown de embeddings generados:');
-    console.log(`   - Chunks del documento: ${result.metadata?.totalChunks || 'N/A'}`);
-    console.log(`   - Embeddings de queries: ${queries.length}`);
-    console.log(`   - Total: ${cacheStats.misses} embeddings nuevos\n`);
+    console.log('\n💡 Generated embeddings breakdown:');
+    console.log(`   - Document chunks: ${result.metadata?.totalChunks || 'N/A'}`);
+    console.log(`   - Query embeddings: ${queries.length}`);
+    console.log(`   - Total: ${cacheStats.misses} new embeddings\n`);
 
-    console.log('✅ Prueba completada exitosamente!\n');
-    console.log('💡 El documento quedó persistido en MongoDB');
-    console.log('   Puedes reiniciar y hacer queries sin re-ingerir\n');
+    console.log('✅ Test completed successfully!\n');
+    console.log('💡 The document has been persisted in MongoDB');
+    console.log('   You can restart and query without re-ingesting\n');
 
   } catch (error) {
-    console.error('❌ Error durante la prueba:', error);
+    console.error('❌ Error during test:', error);
     process.exit(1);
   } finally {
     await plugin.disconnect();

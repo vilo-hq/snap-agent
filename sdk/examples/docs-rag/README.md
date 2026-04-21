@@ -1,139 +1,176 @@
 # DocsRAG Plugin Examples
 
-Ejemplos de uso del **DocsRAGPlugin** con diferentes formatos de documentos.
+Usage examples for **DocsRAGPlugin** with different document formats.
 
-## 📋 Requisitos Previos
+## 📋 Prerequisites
 
-1. **Instalar dependencias del monorepo:**
+1. **Install monorepo dependencies:**
    ```bash
-   # Desde la raíz del monorepo
+   # From the monorepo root
    pnpm install
    ```
-   
-   Los ejemplos importan directamente desde el código fuente del plugin en `plugins/rag/docs/src/`, no del paquete publicado.
 
-2. **Configurar .env:**
+   These examples import directly from the plugin source code in `plugins/rag/docs/src/`, not from the published package.
+
+2. **Configure .env:**
    ```bash
    cd sdk/examples/docs-rag
    cp .env.example .env
-   # Editar .env con tus credenciales
+   # Edit .env with your credentials
    ```
 
-3. **Crear vector search index en MongoDB Atlas:**
-   - Seguir la guía: `plugins/rag/docs/ATLAS_SETUP_GUIDE.md`
-   - O ver: `plugins/rag/docs/README.md#mongodb-setup`
+3. **Create a vector search index in MongoDB Atlas:**
+   - Follow the guide: `plugins/rag/docs/ATLAS_SETUP_GUIDE.md`
+   - Or see: `plugins/rag/docs/README.md#mongodb-setup`
 
-## 🔧 Scripts Disponibles
+## 🔧 Available Scripts
 
-### 1. Verificar Configuración
+### 1. Verify Configuration
 
-Verifica que MongoDB y el vector index estén correctamente configurados:
+Verifies that MongoDB and the vector index are configured correctly:
 
 ```bash
 cd sdk/examples/docs-rag
 npx tsx verify-index.ts
 ```
 
-### 2. Test Básico del Plugin
+### 2. Basic Plugin Test
 
-Prueba completa con documento de ejemplo:
+Full test using a sample document:
 
 ```bash
 cd sdk/examples/docs-rag
 npx tsx test-plugin.ts
 ```
 
-Esto:
-- ✅ Ingiere un documento markdown de ejemplo
-- ✅ Hace 3 queries de prueba
-- ✅ Muestra estadísticas de caché
-- ✅ Verifica persistencia
+This will:
+- ✅ Ingest a sample markdown document
+- ✅ Run 3 test queries
+- ✅ Show cache statistics
+- ✅ Verify persistence
+
+### 3. Agent Persistence (End-to-End)
+
+Verifies that DocsRAGPlugin correctly implements `getConfig()` for persistence:
+
+```bash
+cd sdk/examples/docs-rag
+npx tsx agent-persistence.ts
+```
+
+**This example verifies:**
+- ✅ DocsRAGPlugin has a `getConfig()` method
+- ✅ The configuration is JSON serializable
+- ✅ Sensitive values use environment variable references (for example `${MONGODB_URI}`)
+- ✅ PluginRegistry can re-instantiate the plugin from stored config
+- ✅ The plugin works correctly with an agent
+- ✅ The configuration is saved to MongoDB
+
+**Verification flow:**
+1. Create a `DocsRAGPlugin` instance
+2. Call `getConfig()` to obtain the serializable configuration
+3. Verify that sensitive values use environment variable references
+4. Register the plugin in `PluginRegistry`
+5. Simulate re-instantiation from stored config
+6. Create an agent with the plugin
+7. Verify that the plugin works correctly (ingest and search)
+
+**What this demonstrates:**
+When you reload an agent from MongoDB, the SDK:
+1. Reads the `pluginConfigs` array from the database
+2. Calls `pluginRegistry.instantiate(config)` for each stored config
+3. Resolves environment variables in the registry (for example `${MONGODB_URI}` → real URI)
+4. Calls the factory function with the resolved config
+5. Creates a new plugin instance from that config
+6. Makes the reloaded agent work with the re-instantiated plugins
+
+> 💡 This example proves that the persistence bug is **fixed** for DocsRAGPlugin, EcommerceRAGPlugin, and SupportRAGPlugin (all of them now implement `getConfig()`).
 
 ---
 
-## 📄 Ejemplos por Formato
+## 📄 Format Examples
 
 ### PDF Files
 
-**Instalar:**
+**Install:**
 ```bash
 pnpm add pdf-parse -D @types/pdf-parse
 ```
 
-**Ejecutar:**
+**Run:**
 ```bash
 cd sdk/examples/docs-rag
 npx tsx ingest-pdf.ts path/to/document.pdf
 ```
 
-**Características:**
-- Extrae texto de PDFs
-- Preserva metadata (páginas, autor, fecha)
-- Usa chunking `paragraph`
+**Features:**
+- Extracts text from PDFs
+- Preserves metadata (pages, author, date)
+- Uses `paragraph` chunking
 
 ---
 
 ### DOCX Files (Microsoft Word)
 
-**Instalar:**
+**Install:**
 ```bash
 pnpm add mammoth
 ```
 
-**Ejecutar:**
+**Run:**
 ```bash
 cd sdk/examples/docs-rag
 npx tsx ingest-docx.ts path/to/document.docx
 ```
 
-**Características:**
-- Convierte a markdown
-- Preserva formato (negrita, cursiva, listas)
-- Usa chunking `markdown`
+**Features:**
+- Converts content to markdown
+- Preserves formatting (bold, italics, lists)
+- Uses `markdown` chunking
 
 ---
 
-### HTML (Páginas web o archivos)
+### HTML (Web Pages or Files)
 
-**Instalar:**
+**Install:**
 ```bash
 pnpm add cheerio html-to-text
 ```
 
-**Ejecutar:**
+**Run:**
 ```bash
-# Desde URL
+# From a URL
 cd sdk/examples/docs-rag
 npx tsx ingest-html.ts https://example.com/docs
 
-# Desde archivo
+# From a file
 npx tsx ingest-html.ts path/to/file.html
 ```
 
-**Características:**
-- Scraping de contenido web
-- Limpia scripts, estilos, navegación
-- Extrae contenido principal
-- Convierte a texto plano
+**Features:**
+- Scrapes web content
+- Removes scripts, styles, and navigation
+- Extracts main content
+- Converts to plain text
 
 ---
 
-### Código Fuente (TypeScript, JavaScript, Python, etc.)
+### Source Code (TypeScript, JavaScript, Python, etc.)
 
-**Ejecutar:**
+**Run:**
 ```bash
 cd sdk/examples/docs-rag
 npx tsx ingest-code.ts /path/to/codebase
 ```
 
-**Características:**
-- Escanea directorios recursivamente
-- Soporta 12+ lenguajes
-- Ignora `node_modules`, `dist`, `.git`
-- Usa chunking `fixed` (mejor para código)
-- Búsqueda semántica de implementaciones
+**Features:**
+- Scans directories recursively
+- Supports 12+ languages
+- Ignores `node_modules`, `dist`, `.git`
+- Uses `fixed` chunking (better for code)
+- Enables semantic search for implementations
 
-**Lenguajes soportados:**
+**Supported languages:**
 - TypeScript/JavaScript (`.ts`, `.tsx`, `.js`, `.jsx`)
 - Python (`.py`)
 - Java (`.java`)
@@ -148,65 +185,66 @@ npx tsx ingest-code.ts /path/to/codebase
 
 ---
 
-## 🏗️ Estructura de Archivos
+## 🏗️ File Structure
 
 ```
 sdk/examples/docs-rag/
-├── .env.example          # Template de configuración
-├── README.md            # Esta guía
-├── verify-index.ts      # Verificar MongoDB setup
-├── test-plugin.ts       # Test básico completo
-├── ingest-pdf.ts        # Ejemplo PDF
-├── ingest-docx.ts       # Ejemplo DOCX
-├── ingest-html.ts       # Ejemplo HTML/Web
-└── ingest-code.ts       # Ejemplo código fuente
+├── .env.example          # Configuration template
+├── README.md             # This guide
+├── verify-index.ts       # Verify MongoDB setup
+├── test-plugin.ts        # Full basic test
+├── agent-persistence.ts  # ⭐ Full persistence flow (E2E)
+├── ingest-pdf.ts         # PDF example
+├── ingest-docx.ts        # DOCX example
+├── ingest-html.ts        # HTML/Web example
+└── ingest-code.ts        # Source code example
 ```
 
-## 📚 Documentación Adicional
+## 📚 Additional Documentation
 
 - **Plugin README:** `plugins/rag/docs/README.md`
 - **Setup Guide:** `plugins/rag/docs/ATLAS_SETUP_GUIDE.md`
 - **Troubleshooting:** `plugins/rag/docs/TROUBLESHOOTING.md`
-- **Formatos soportados:** `plugins/rag/docs/SUPPORTED_FORMATS.md`
+- **Supported formats:** `plugins/rag/docs/SUPPORTED_FORMATS.md`
 - **Quick Start:** `plugins/rag/docs/QUICKSTART.md`
 
-## 🚀 Próximos Pasos
+## 🚀 Next Steps
 
-1. **Ejecuta verify-index.ts** para confirmar la configuración
-2. **Ejecuta test-plugin.ts** para verificar que todo funciona
-3. **Prueba los ejemplos** con tus propios documentos
-4. **Integra en tu aplicación** usando estos ejemplos como referencia
+1. **Run verify-index.ts** to confirm the configuration
+2. **Run test-plugin.ts** to verify everything works
+3. **Try the examples** with your own documents
+4. **Integrate into your application** using these examples as reference
 
-## 💡 Consejos
+## 💡 Tips
 
 - **Chunking Strategy:**
-  - Usa `markdown` para docs estructurados
-  - Usa `paragraph` para PDFs y HTML
-  - Usa `fixed` para código fuente
-  - Usa `sentence` para texto plano
+  - Use `markdown` for structured docs
+  - Use `paragraph` for PDFs and HTML
+  - Use `fixed` for source code
+  - Use `sentence` for plain text
 
 - **Embedding Cache:**
-  - Reduce costos de OpenAI API
-  - Mejora performance
-  - Ve estadísticas con `cacheHits`/`cacheMisses`
+  - Reduces OpenAI API costs
+  - Improves performance
+  - Check stats with `cacheHits` and `cacheMisses`
 
 - **Persistent Storage:**
-  - Los documentos se guardan en MongoDB
-  - No necesitas re-ingerir después de reiniciar
-  - Puedes actualizar o eliminar documentos individualmente
+  - Documents are stored in MongoDB
+  - You do not need to re-ingest after restarting
+  - You can update or delete documents individually
 
-## ❓ Problemas Comunes
+## ❓ Common Problems
 
 **Error: "vector search index not found"**
-- Crea el índice vectorial en Atlas UI
-- Sigue: `plugins/rag/docs/ATLAS_SETUP_GUIDE.md`
+- Create the vector index in the Atlas UI
+- Follow: `plugins/rag/docs/ATLAS_SETUP_GUIDE.md`
 
 **Error: "MONGODB_URI is not set"**
-- Crea el archivo `.env` en este directorio
-- Copia desde `.env.example` y edita
+- Create the `.env` file in this directory
+- Copy from `.env.example` and edit it
 
 **Error: "listSearchIndexes() not supported"**
-- Requiere MongoDB Atlas M10+ tier
-- Free tier (M0) NO soporta vector search
+- Requires MongoDB Atlas M10+ tier
+- Free tier (M0) does NOT support vector search
 
-Ver más en: `plugins/rag/docs/TROUBLESHOOTING.md`
+See more in: `plugins/rag/docs/TROUBLESHOOTING.md`

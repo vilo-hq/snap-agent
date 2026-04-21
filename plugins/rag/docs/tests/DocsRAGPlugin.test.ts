@@ -855,5 +855,58 @@ describe('DocsRAGPlugin', () => {
       expect(result.errors?.[0].error).toContain('Voyage API error');
     });
   });
+
+  // ============================================================================
+  // Plugin Configuration (getConfig)
+  // ============================================================================
+
+  describe('getConfig', () => {
+    beforeEach(() => {
+      plugin = new DocsRAGPlugin(defaultConfig);
+    });
+
+    it('should return a serializable config object', () => {
+      const config = plugin.getConfig();
+      expect(config).toBeDefined();
+      expect(typeof config).toBe('object');
+    });
+
+    it('should NOT expose sensitive values', () => {
+      const config = plugin.getConfig();
+      // Los valores sensibles deben ser referencias a env vars
+      expect(config.mongoUri).toBe('${MONGODB_URI}');
+      expect(config.embeddingProviderApiKey).toMatch(/^\$\{.+\}$/);
+    });
+
+    it('should preserve non-sensitive config values', () => {
+      const config = plugin.getConfig();
+      expect(config.dbName).toBe(defaultConfig.dbName);
+      expect(config.tenantId).toBe(defaultConfig.tenantId);
+      expect(config.limit).toBe(defaultConfig.limit ?? 5);
+      expect(config.chunkingStrategy).toBe(defaultConfig.chunkingStrategy ?? 'markdown');
+    });
+
+    it('config should be JSON-serializable', () => {
+      const config = plugin.getConfig();
+      expect(() => JSON.stringify(config)).not.toThrow();
+      const serialized = JSON.stringify(config);
+      expect(serialized).toBeTruthy();
+    });
+
+    it('should include all necessary fields for re-instantiation', () => {
+      const config = plugin.getConfig();
+      expect(config).toHaveProperty('mongoUri');
+      expect(config).toHaveProperty('dbName');
+      expect(config).toHaveProperty('collection');
+      expect(config).toHaveProperty('tenantId');
+      expect(config).toHaveProperty('embeddingProviderApiKey');
+      expect(config).toHaveProperty('embeddingProvider');
+      expect(config).toHaveProperty('embeddingModel');
+      expect(config).toHaveProperty('vectorIndexName');
+      expect(config).toHaveProperty('chunkingStrategy');
+      expect(config).toHaveProperty('limit');
+      expect(config).toHaveProperty('priority');
+    });
+  });
 });
 

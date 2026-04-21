@@ -917,5 +917,32 @@ export class DocsRAGPlugin implements RAGPlugin {
 
     return result.deletedCount;
   }
+
+  /**
+   * Get plugin configuration (for persistence)
+   * Returns serializable config with env var references for sensitive data
+   */
+  getConfig(): Record<string, any> {
+    return {
+      mongoUri: '${MONGODB_URI}',
+      dbName: this.config.dbName,
+      collection: this.config.collection,
+      tenantId: this.config.tenantId,
+      embeddingProviderApiKey: '${OPENAI_API_KEY}',
+      embeddingProvider: this.config.embeddingProvider,
+      embeddingModel: this.config.embeddingModel,
+      vectorIndexName: this.config.vectorIndexName,
+      numCandidates: this.config.numCandidates,
+      chunkingStrategy: this.config.chunkingStrategy,
+      maxChunkSize: this.config.maxChunkSize,
+      chunkOverlap: this.config.chunkOverlap,
+      limit: this.config.limit,
+      minSimilarity: this.config.minSimilarity,
+      includeCode: this.config.includeCode,
+      filterableFields: this.config.filterableFields,
+      cache: this.config.cache,
+      priority: this.priority,
+    };
+  }
 }
 

@@ -638,5 +638,30 @@ export class SupportRAGPlugin implements RAGPlugin {
   clearAll(): void {
     this.documents.clear();
   }
+
+  /**
+   * Get plugin configuration (for persistence)
+   * Returns serializable config with env var references for sensitive data
+   */
+  getConfig(): Record<string, any> {
+    return {
+      embeddingProviderApiKey: '${OPENAI_API_KEY}',
+      embeddingProvider: this.config.embeddingProvider,
+      embeddingModel: this.config.embeddingModel,
+      limit: this.config.limit,
+      minSimilarity: this.config.minSimilarity,
+      resolvedBoost: this.config.resolvedBoost,
+      faqBoost: this.config.faqBoost,
+      includeHistory: this.config.includeHistory,
+      maxTicketAgeDays: this.config.maxTicketAgeDays,
+    };
+  }
+
+  /**
+   * Disconnect method (no-op for in-memory plugin)
+   */
+  async disconnect(): Promise<void> {
+    // No resources to cleanup for in-memory storage
+  }
 }
 

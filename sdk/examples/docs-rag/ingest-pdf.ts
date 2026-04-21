@@ -1,10 +1,10 @@
 /**
- * Ejemplo: Ingerir documentos PDF en DocsRAGPlugin
+ * Example: Ingest PDF documents into DocsRAGPlugin
  * 
- * Requiere instalar:
+ * Requires installing:
  * pnpm add pdf-parse -D @types/pdf-parse
  * 
- * Uso:
+ * Usage:
  * cd sdk/examples/docs-rag
  * npx tsx ingest-pdf.ts path/to/document.pdf
  */
@@ -15,26 +15,26 @@ import { readFileSync } from 'fs';
 import pdf from 'pdf-parse';
 import { DocsRAGPlugin } from '../../../plugins/rag/docs/src/DocsRAGPlugin';
 
-// Cargar .env desde este directorio
+// Load .env from this directory
 config({ path: resolve(__dirname, '.env') });
 
 async function ingestPDF(pdfPath: string) {
-  console.log('📄 Extrayendo texto de PDF...\n');
+  console.log('📄 Extracting text from PDF...\n');
 
-  // 1. Leer archivo PDF
+  // 1. Read PDF file
   const dataBuffer = readFileSync(pdfPath);
   const pdfData = await pdf(dataBuffer);
 
-  console.log(`📊 Páginas: ${pdfData.numpages}`);
-  console.log(`📝 Caracteres: ${pdfData.text.length}\n`);
+  console.log(`📊 Pages: ${pdfData.numpages}`);
+  console.log(`📝 Characters: ${pdfData.text.length}\n`);
 
-  // 2. Crear plugin
+  // 2. Create plugin
   const plugin = new DocsRAGPlugin({
     mongoUri: process.env.MONGODB_URI!,
     dbName: process.env.MONGODB_DB || 'my_docs',
     tenantId: 'test-tenant',
     embeddingProviderApiKey: process.env.OPENAI_API_KEY!,
-    chunkingStrategy: 'paragraph',  // Mejor para PDFs sin markdown
+    chunkingStrategy: 'paragraph',  // Better for PDFs without markdown
     maxChunkSize: 1500,
     cache: {
       embeddings: {
@@ -46,10 +46,10 @@ async function ingestPDF(pdfPath: string) {
   });
 
   try {
-    // 3. Ingerir el contenido del PDF
+    // 3. Ingest PDF content
     const filename = pdfPath.split('/').pop() || pdfPath.split('\\').pop() || pdfPath;
     
-    console.log('📦 Ingiriendo en MongoDB...');
+    console.log('📦 Ingesting into MongoDB...');
     const result = await plugin.ingest([
       {
         id: `pdf-${Date.now()}`,
@@ -66,23 +66,23 @@ async function ingestPDF(pdfPath: string) {
     ], { agentId: 'pdf-agent' });
 
     if (result.success) {
-      console.log(`✅ PDF ingerido exitosamente!`);
-      console.log(`   Documentos: ${result.indexed}`);
-      console.log(`   Estrategia: ${result.metadata?.strategy}\n`);
+      console.log(`✅ PDF ingested successfully!`);
+      console.log(`   Documents: ${result.indexed}`);
+      console.log(`   Strategy: ${result.metadata?.strategy}\n`);
     }
 
-    // 4. Probar búsqueda
-    console.log('🔍 Probando búsqueda...');
+    // 4. Test search
+    console.log('🔍 Testing search...');
     const context = await plugin.retrieveContext(
       'What is this document about?',
       { agentId: 'pdf-agent' }
     );
 
-    console.log(`   Resultados: ${context.metadata?.count}`);
-    console.log(`   Score promedio: ${context.metadata?.avgScore?.toFixed(3)}\n`);
+    console.log(`   Results: ${context.metadata?.count}`);
+    console.log(`   Average score: ${context.metadata?.avgScore?.toFixed(3)}\n`);
 
     if (context.sources && context.sources.length > 0) {
-      console.log('📄 Fragmentos encontrados:');
+      console.log('📄 Fragments found:');
       context.sources.forEach((source: any, i: number) => {
         console.log(`   ${i + 1}. Score: ${source.score.toFixed(3)}`);
       });
@@ -99,8 +99,8 @@ async function ingestPDF(pdfPath: string) {
 const pdfPath = process.argv[2];
 
 if (!pdfPath) {
-  console.error('❌ Error: Proporciona la ruta al archivo PDF');
-  console.log('\nUso:');
+  console.error('❌ Error: Provide the path to the PDF file');
+  console.log('\nUsage:');
   console.log('  cd sdk/examples/docs-rag');
   console.log('  npx tsx ingest-pdf.ts path/to/document.pdf');
   process.exit(1);
