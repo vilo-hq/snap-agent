@@ -11,6 +11,7 @@ async function main() {
     storage: new MemoryStorage(),
     providers: {
       openai: { apiKey: process.env.OPENAI_API_KEY! },
+      google: { apiKey: process.env.GOOGLE_API_KEY! },
     },
   });
 
@@ -20,7 +21,8 @@ async function main() {
   const agent = await client.createAgent({
     name: 'Storyteller',
     instructions: 'You are a creative storyteller. Write engaging short stories.',
-    model: 'gpt-4o',
+    provider: 'google',
+    model: 'gemini-2.0-flash',
     userId: 'user-123',
   });
 
@@ -46,9 +48,15 @@ async function main() {
       onComplete: (fullResponse) => {
         console.log('\n' + '─'.repeat(60));
         console.log(`\nStreaming complete! (${fullResponse.length} characters)\n`);
-        
+
+        if (fullResponse.trim().length === 0) {
+          console.log('Empty completion received (nothing to persist).');
+          console.log('Check provider/model configuration or upstream provider errors.');
+          return;
+        }
+
         // You can do something with the full response here
-        console.log('Response saved to thread');
+        console.log('Non-empty response completed and persisted to thread.');
       },
       onError: (error) => {
         console.error('\nError:', error.message);
