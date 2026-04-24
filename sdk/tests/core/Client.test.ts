@@ -667,7 +667,44 @@ describe('AgentClient', () => {
       expect(response.metadata).toEqual({ latency: 100 });
     });
 
+    it('should throw error on empty response with policy error (default)', async () => {
+      mockAgent.generateResponse.mockResolvedValue({
+        text: '',
+        metadata: { latency: 50 },
+      });
+
+      await expect(
+        client.chat({
+          threadId: 'thread-1',
+          message: 'Hi!',
+        })
+      ).rejects.toThrow('Provider returned empty response');
+    });
+
+    it('should allow empty response with policy allow', async () => {
+      mockAgent.generateResponse.mockResolvedValue({
+        text: '',
+        metadata: { latency: 50 },
+      });
+
+      const response = await client.chat({
+        threadId: 'thread-1',
+        message: 'Hi!',
+        emptyResponsePolicy: 'allow',
+      });
+
+      expect(response.reply).toBe('');
+      expect(response.messageId).toBe('');
+      expect(mockThread.addMessage).toHaveBeenCalledTimes(1);
+      expect(mockThread.addMessage).toHaveBeenCalledWith('user', 'Hi!', undefined);
+    });
+
     it('should pass attachments to thread', async () => {
+      mockAgent.generateResponse.mockResolvedValue({
+        text: 'Got it',
+        metadata: { latency: 50 },
+      });
+
       const attachments = [
         { fileId: 'file-1', filename: 'doc.pdf', contentType: 'application/pdf', size: 1024 },
       ];
@@ -792,6 +829,83 @@ describe('AgentClient', () => {
       );
 
       expect(mockThread.getConversationContext).toHaveBeenCalledWith(100);
+    });
+
+    it('should not persist an empty assistant response on stream completion with policy allow', async () => {
+      mockAgent.streamResponse.mockImplementation(
+        async (_msgs, _onChunk, onComplete) => {
+          await onComplete('', { latency: 10 });
+        }
+      );
+
+      await client.chatStream(
+        { threadId: 'thread-1', message: 'Hi!', emptyResponsePolicy: 'allow' },
+        callbacks
+      );
+
+      expect(mockThread.addMessage).toHaveBeenCalledTimes(1);
+      expect(mockThread.addMessage).toHaveBeenCalledWith(
+        'user',
+        'Hi!',
+        undefined
+      );
+      expect(callbacks.onComplete).toHaveBeenCalledWith('', { latency: 10 });
+    });
+
+    it('should route async onComplete callback failures to onError', async () => {
+      const completionError = new Error('completion failed');
+      mockAgent.streamResponse.mockImplementation(
+        async (_msgs, _onChunk, onComplete) => {
+          await onComplete('Hello world', { latency: 50 });
+        }
+      );
+      callbacks.onComplete.mockImplementation(async () => {
+        throw completionError;
+      });
+
+      await client.chatStream(
+        { threadId: 'thread-1', message: 'Hi!' },
+        callbacks
+      );
+
+      expect(callbacks.onError).toHaveBeenCalledWith(completionError);
+    });
+
+    it('should treat empty response as error with policy error (default)', async () => {
+      mockAgent.streamResponse.mockImplementation(
+        async (_msgs, _onChunk, onComplete) => {
+          await onComplete('', { latency: 10 });
+        }
+      );
+
+      await client.chatStream(
+        { threadId: 'thread-1', message: 'Hi!' },
+        callbacks
+      );
+
+      expect(callbacks.onError).toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'Provider returned empty response' })
+      );
+    });
+
+    it('should allow empty response with policy allow', async () => {
+      callbacks.onComplete.mockReset();
+      callbacks.onComplete.mockImplementation(vi.fn());
+      mockAgent.streamResponse.mockImplementation(
+        async (_msgs, _onChunk, onComplete) => {
+          await onComplete('', { latency: 10 });
+        }
+      );
+
+      await client.chatStream(
+        { threadId: 'thread-1', message: 'Hi!', emptyResponsePolicy: 'allow' },
+        callbacks
+      );
+
+      expect(callbacks.onError).not.toHaveBeenCalled();
+      expect(callbacks.onComplete).toHaveBeenCalledWith('', { latency: 10 });
+      expect(mockThread.addMessage).toHaveBeenCalledTimes(1);
+      expect(mockThread.addMessage).toHaveBeenCalledWith('user', 'Hi!', undefined);
     });
   });
 

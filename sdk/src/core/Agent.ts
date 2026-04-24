@@ -360,8 +360,8 @@ export class Agent {
   async streamResponse(
     messages: AIMessage[],
     onChunk: (chunk: string) => void,
-    onComplete?: (fullText: string, metadata?: Record<string, any>) => void,
-    onError?: (error: Error) => void,
+    onComplete?: (fullText: string, metadata?: Record<string, any>) => void | Promise<void>,
+    onError?: (error: Error) => void | Promise<void>,
     options?: {
       useRAG?: boolean;
       ragFilters?: Record<string, any>;
@@ -449,7 +449,7 @@ export class Agent {
       });
 
       if (onComplete) {
-        onComplete(afterResult.response, {
+        await onComplete(afterResult.response, {
           ...afterResult.metadata,
           ragMetadata,
           latency,
@@ -457,7 +457,7 @@ export class Agent {
       }
     } catch (error) {
       if (onError) {
-        onError(error instanceof Error ? error : new Error('Unknown error'));
+        await onError(error instanceof Error ? error : new Error('Unknown error'));
       } else {
         throw error;
       }

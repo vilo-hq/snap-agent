@@ -141,6 +141,7 @@ export interface ChatRequest {
   useRAG?: boolean; // Enable RAG plugins
   ragFilters?: Record<string, any>; // Filters for RAG plugins
   contextLength?: number; // Number of messages to include in context (default: 20)
+  emptyResponsePolicy?: 'allow' | 'error'; // How to handle empty responses (default: 'error')
 }
 
 export interface ChatResponse {
@@ -158,8 +159,8 @@ export interface ChatResponse {
 
 export interface StreamCallbacks {
   onChunk: (chunk: string) => void;
-  onComplete: (fullResponse: string, metadata?: Record<string, any>) => void;
-  onError: (error: Error) => void;
+  onComplete: (fullResponse: string, metadata?: Record<string, any>) => void | Promise<void>;
+  onError: (error: Error) => void | Promise<void>;
 }
 
 // ============================================================================

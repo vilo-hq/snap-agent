@@ -226,8 +226,17 @@ export class AgentClient {
       threadId: thread.id,
     });
 
-    // Add assistant response to thread
-    const messageId = await thread.addMessage('assistant', result.text);
+    // Check empty response policy (default: error)
+    const emptyPolicy = request.emptyResponsePolicy ?? 'error';
+    if (emptyPolicy === 'error' && result.text.trim().length === 0) {
+      throw new Error('Provider returned empty response');
+    }
+
+    // Add assistant response to thread only if not empty
+    let messageId = '';
+    if (result.text.trim().length > 0) {
+      messageId = await thread.addMessage('assistant', result.text);
+    }
 
     return {
       reply: result.text,
@@ -258,13 +267,19 @@ export class AgentClient {
       const messages = await thread.getConversationContext(contextLength);
 
       // Stream response with plugin support
+      const emptyPolicy = request.emptyResponsePolicy ?? 'error';
       await agent.streamResponse(
         messages,
         callbacks.onChunk,
         async (fullResponse: string, metadata?: Record<string, any>) => {
-          // Add assistant response to thread
-          await thread.addMessage('assistant', fullResponse);
-          callbacks.onComplete(fullResponse, metadata);
+          // Check empty response policy (default: error)
+          if (emptyPolicy === 'error' && fullResponse.trim().length === 0) {
+            throw new Error('Provider returned empty response');
+          }
+          if (fullResponse.length > 0) {
+            await thread.addMessage('assistant', fullResponse);
+          }
+          await callbacks.onComplete(fullResponse, metadata);
         },
         callbacks.onError,
         {
@@ -274,7 +289,7 @@ export class AgentClient {
         }
       );
     } catch (error) {
-      callbacks.onError(
+      await callbacks.onError(
         error instanceof Error ? error : new Error('Unknown error')
       );
     }
