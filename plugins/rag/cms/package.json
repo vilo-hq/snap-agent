@@ -1,6 +1,6 @@
 {
   "name": "@snap-agent/rag-cms",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "CMS RAG plugin for SnapAgent SDK - Schema-agnostic content search for Drupal, WordPress, and any CMS",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
@@ -42,7 +42,7 @@
   },
   "peerDependencies": {
     "@snap-agent/core": "^0.1.0",
-    "mongodb": "^6.0.0"
+    "mongodb": "^6.0.0 || ^7.0.0"
   },
   "dependencies": {
     "cheerio": "^1.0.0",
