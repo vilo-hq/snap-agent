@@ -1,6 +1,6 @@
 {
   "name": "@snap-agent/rag-support",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Customer Support RAG plugin for SnapAgent SDK - Search tickets, FAQs, and support history",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
@@ -37,7 +37,7 @@
   "author": "ViloTech",
   "license": "MIT",
   "peerDependencies": {
-    "@snap-agent/core": "^0.1.0"
+    "@snap-agent/core": "^0.1.0 || ^0.2.0"
   },
   "dependencies": {},
   "devDependencies": {

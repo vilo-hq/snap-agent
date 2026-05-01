@@ -1,6 +1,6 @@
 {
   "name": "@snap-agent/rag-ecommerce",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "E-commerce RAG plugin for SnapAgent SDK - Product search with vector embeddings",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
@@ -37,8 +37,8 @@
     "access": "public"
   },
   "peerDependencies": {
-    "@snap-agent/core": "^0.1.0",
-    "mongodb": "^6.0.0"
+    "@snap-agent/core": "^0.1.0 || ^0.2.0",
+    "mongodb": "^6.0.0 || ^7.0.0"
   },
   "dependencies": {
     "openai": "^5.0.1"
