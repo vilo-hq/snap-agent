@@ -1,6 +1,6 @@
 {
   "name": "@snap-agent/core",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "SnapAgent - The lightweight, snap-in AI agent SDK. Multi-provider support. Edge-runtime compatible.",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
@@ -82,8 +82,12 @@
   "license": "MIT",
   "peerDependencies": {
     "@ai-sdk/openai": "^2.0.0 || ^3.0.0",
+    "@ai-sdk/anthropic": "^3.0.0",
+    "@ai-sdk/google": "^3.0.0",
+    "@ai-sdk/huggingface": "^1.0.0",
     "ai": "^5.0.0 || ^6.0.0",
-    "mongodb": "^6.0.0 || ^7.0.0"
+    "mongodb": "^6.0.0 || ^7.0.0",
+    "zod": "^3.25.76 || ^4.0.0"
   },
   "peerDependenciesMeta": {
     "@ai-sdk/anthropic": {
@@ -99,6 +103,9 @@
       "optional": true
     },
     "@upstash/redis": {
+      "optional": true
+    },
+    "zod": {
       "optional": true
     }
   },
@@ -116,8 +123,7 @@
     "vitest": "^1.0.0"
   },
   "dependencies": {
-    "openai": "^6.34.0",
-    "zod": "^3.25.76"
+    "openai": "^6.36.0"
   },
   "publishConfig": {
     "access": "public"
