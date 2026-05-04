@@ -1,6 +1,6 @@
 {
   "name": "@snap-agent/rag-docs",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Documentation RAG plugin for SnapAgent SDK - Semantic search over markdown, code, and technical documentation",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
@@ -45,7 +45,7 @@
     "mongodb": "^6.0.0 || ^7.0.0"
   },
   "dependencies": {
-    "openai": "^5.0.1"
+    "openai": "^6.36.0"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
