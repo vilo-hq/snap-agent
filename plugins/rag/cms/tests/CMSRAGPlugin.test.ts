@@ -1,30 +1,45 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { CMSRAGPlugin } from '../src/CMSRAGPlugin';
 
-// Mock MongoDB
-vi.mock('mongodb', () => {
+// Mock MongoDB (findOne / find for crawl ledger)
+const mongoLedger = vi.hoisted(() => {
+  const toArrayFind = vi.fn().mockResolvedValue([]);
+  const mockFindOne = vi.fn().mockResolvedValue(null);
   const mockCollection = {
     aggregate: vi.fn().mockReturnValue({
       toArray: vi.fn().mockResolvedValue([]),
     }),
     updateOne: vi.fn().mockResolvedValue({ upsertedCount: 1 }),
     deleteMany: vi.fn().mockResolvedValue({ deletedCount: 1 }),
+    findOne: mockFindOne,
+    find: vi.fn().mockReturnValue({
+      sort: vi.fn().mockReturnValue({
+        skip: vi.fn().mockReturnValue({
+          limit: vi.fn().mockReturnValue({
+            toArray: toArrayFind,
+          }),
+        }),
+      }),
+    }),
   };
-
   const mockDb = {
     collection: vi.fn().mockReturnValue(mockCollection),
   };
-
   const mockClient = {
     connect: vi.fn().mockResolvedValue(undefined),
     close: vi.fn().mockResolvedValue(undefined),
     db: vi.fn().mockReturnValue(mockDb),
   };
-
   return {
     MongoClient: vi.fn().mockImplementation(() => mockClient),
+    mockFindOne,
+    toArrayFind,
   };
 });
+
+vi.mock('mongodb', () => ({
+  MongoClient: mongoLedger.MongoClient,
+}));
 
 // Mock OpenAI
 vi.mock('openai', () => {
@@ -48,6 +63,8 @@ describe('CMSRAGPlugin', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mongoLedger.mockFindOne.mockResolvedValue(null);
+    mongoLedger.toArrayFind.mockResolvedValue([]);
     plugin = new CMSRAGPlugin({
       mongoUri: 'mongodb://localhost:27017',
       dbName: 'test_db',
@@ -1091,6 +1108,7 @@ describe('CMSRAGPlugin', () => {
       ], {
         type: 'page',
         concurrency: 1, // Process one at a time for predictable test
+        renderOptions: { minContentLength: 50 },
       });
 
       expect(result.urlsCrawled).toBe(2);
@@ -1131,10 +1149,262 @@ describe('CMSRAGPlugin', () => {
       const result = await plugin.ingestFromUrls([
         'https://example.com/good',
         'https://example.com/missing',
-      ]);
+      ], {
+        renderOptions: { minContentLength: 50 },
+      });
 
       expect(result.urlsCrawled).toBe(1);
       expect(result.urlsFailed).toBe(1);
+    });
+  });
+
+  describe('ingestFromWebsite', () => {
+    beforeEach(() => {
+      mockFetch.mockReset();
+    });
+
+    it('should require baseUrl', async () => {
+      const result = await plugin.ingestFromWebsite({ baseUrl: '' });
+      expect(result.success).toBe(false);
+      expect(result.errors?.[0].error).toContain('baseUrl is required');
+    });
+
+    it('should reject invalid baseUrl', async () => {
+      const result = await plugin.ingestFromWebsite({ baseUrl: 'not-a-url' });
+      expect(result.success).toBe(false);
+      expect(result.errors?.[0].error).toContain('Invalid baseUrl');
+    });
+
+    it('should discover URLs from robots sitemap then crawl', async () => {
+      const longArticle = `<article>${'paragraph text '.repeat(20)}</article>`;
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          text: async () => 'Sitemap: https://example.com/site-map.xml',
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          text: async () => `<?xml version="1.0" encoding="UTF-8"?>
+            <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+              <url><loc>https://example.com/docs/page</loc></url>
+            </urlset>`,
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          headers: { get: () => 'text/html' },
+          text: async () => `<html><head><title>Docs</title></head><body>${longArticle}</body></html>`,
+        });
+
+      const result = await plugin.ingestFromWebsite({
+        baseUrl: 'https://example.com/',
+        maxPages: 5,
+        delayMs: 0,
+        concurrency: 1,
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.urlsCrawled).toBeGreaterThanOrEqual(1);
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://example.com/robots.txt',
+        expect.any(Object)
+      );
+    });
+
+    it('should fall back to internal link BFS when sitemaps yield no URLs', async () => {
+      const body = `<main>${'fallback crawl content '.repeat(15)}</main>`;
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          text: async () => '',
+        });
+      for (let i = 0; i < 4; i++) {
+        mockFetch.mockResolvedValueOnce({ ok: false, status: 404 });
+      }
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          headers: { get: () => 'text/html' },
+          text: async () =>
+            `<html><body><a href="/inner">Inner</a><p>${'home '.repeat(30)}</p></body></html>`,
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          headers: { get: () => 'text/html' },
+          text: async () => `<html><body>${body}</body></html>`,
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          headers: { get: () => 'text/html' },
+          text: async () =>
+            `<html><body><a href="/inner">Inner</a><p>${'home '.repeat(30)}</p></body></html>`,
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          headers: { get: () => 'text/html' },
+          text: async () => `<html><body>${body}</body></html>`,
+        });
+
+      const result = await plugin.ingestFromWebsite({
+        baseUrl: 'https://example.com/',
+        maxPages: 3,
+        maxDepth: 2,
+        delayMs: 0,
+        concurrency: 1,
+        debug: { enabled: true, level: 'summary' },
+        renderOptions: { minContentLength: 50 },
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.urlsCrawled).toBeGreaterThanOrEqual(1);
+      expect(result.metadata?.discoveryDebug).toBeDefined();
+    });
+  });
+
+  describe('ingestSinglePageFromUrl', () => {
+    beforeEach(() => {
+      mockFetch.mockReset();
+    });
+
+    it('should require url', async () => {
+      const result = await plugin.ingestSinglePageFromUrl({ url: '' });
+      expect(result.success).toBe(false);
+      expect(result.errors?.[0].error).toContain('url is required');
+    });
+
+    it('should crawl a single URL', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        headers: { get: () => 'text/html' },
+        text: async () =>
+          `<html><body><article>${'single page body '.repeat(20)}</article></body></html>`,
+      });
+
+      const result = await plugin.ingestSinglePageFromUrl({
+        url: 'https://example.com/only',
+        timeout: 10000,
+      });
+
+      expect(result.urlsCrawled).toBe(1);
+      expect(result.success).toBe(true);
+    });
+  });
+
+  describe('crawl ledger', () => {
+    beforeEach(() => {
+      mockFetch.mockReset();
+    });
+
+    it('should skip crawl when ledger has fresh indexed row', async () => {
+      mongoLedger.mockFindOne.mockResolvedValue({
+        lastStatus: 'indexed',
+        lastCrawledAt: new Date(),
+        contentLength: 400,
+        title: 'Cached',
+        docId: 'abc',
+      });
+
+      const ledgerPlugin = new CMSRAGPlugin({
+        mongoUri: 'mongodb://localhost:27017',
+        dbName: 'test_db',
+        openaiApiKey: 'test-key',
+        tenantId: 'test-tenant',
+        crawlLedger: {
+          enabled: true,
+          ttlMsIndexed: 7 * 24 * 60 * 60 * 1000,
+        },
+      });
+
+      const result = await ledgerPlugin.ingestFromUrls(
+        ['https://example.com/cached'],
+        { type: 'page', concurrency: 1, stripQueryParams: true }
+      );
+
+      expect(result.metadata?.counters?.ledgerSkipped).toBe(1);
+      expect(result.urlsCrawled).toBe(0);
+      expect(mockFetch).not.toHaveBeenCalled();
+      await ledgerPlugin.disconnect();
+    });
+
+    it('should list crawl ledger rows', async () => {
+      const row = {
+        tenantId: 'test-tenant',
+        agentId: 'shared',
+        urlNormalized: 'https://example.com/a',
+        url: 'https://example.com/a',
+        domain: 'example.com',
+        lastStatus: 'indexed',
+        lastCrawledAt: new Date(),
+        updatedAt: new Date(),
+      };
+      mongoLedger.toArrayFind.mockResolvedValueOnce([row]);
+
+      const ledgerPlugin = new CMSRAGPlugin({
+        mongoUri: 'mongodb://localhost:27017',
+        dbName: 'test_db',
+        openaiApiKey: 'test-key',
+        tenantId: 'test-tenant',
+        crawlLedger: { enabled: true },
+      });
+
+      const rows = await ledgerPlugin.listCrawlLedger({ limit: 5 });
+      expect(rows).toHaveLength(1);
+      expect(rows[0].url).toBe('https://example.com/a');
+      await ledgerPlugin.disconnect();
+    });
+  });
+
+  describe('render / ledger diagnostics (helpers)', () => {
+    it('diagFromRenderedAttempt: infra failure is render_error with message', () => {
+      const p = plugin as unknown as {
+        diagFromRenderedAttempt: (
+          doc: null,
+          hint: number,
+          renderFailure: string | undefined,
+          blocked: boolean | undefined,
+          ok: string,
+          fail: string
+        ) => { diag?: { reason?: string; errorMessage?: string } };
+      };
+      const r = p.diagFromRenderedAttempt(
+        null,
+        0,
+        'page.goto: Timeout 30000ms exceeded',
+        undefined,
+        'render_ok',
+        'render_failed'
+      );
+      expect(r.diag?.reason).toBe('render_error');
+      expect(r.diag?.errorMessage).toContain('Timeout');
+    });
+
+    it('diagFromRenderedAttempt: captcha path is blocked_suspected', () => {
+      const p = plugin as unknown as {
+        diagFromRenderedAttempt: (
+          doc: null,
+          hint: number,
+          renderFailure: string | undefined,
+          blocked: boolean | undefined,
+          ok: string,
+          fail: string
+        ) => { diag?: { reason?: string } };
+      };
+      const r = p.diagFromRenderedAttempt(
+        null,
+        0,
+        undefined,
+        true,
+        'render_ok',
+        'render_failed'
+      );
+      expect(r.diag?.reason).toBe('blocked_suspected');
+    });
+
+    it('toLedgerStatus maps render_error to error', () => {
+      const p = plugin as unknown as {
+        toLedgerStatus: (doc: null, diag?: { reason?: string }) => string;
+      };
+      expect(p.toLedgerStatus(null, { reason: 'render_error' })).toBe('error');
+      expect(p.toLedgerStatus(null, { reason: 'too_small' })).toBe('too_small');
     });
   });
 
