@@ -82,6 +82,84 @@ export interface CMSRAGConfig {
 
   // Plugin priority (higher = runs first)
   priority?: number;
+
+  /**
+   * Persistent crawl ledger (MongoDB) — skip re-crawl within TTL, audit per URL.
+   * Per-request overrides: pass `crawlLedger` on SitemapConfig / WebsiteCrawlConfig / etc.
+   */
+  crawlLedger?: CrawlLedgerPluginConfig;
+}
+
+/**
+ * Global defaults for crawl ledger (MongoDB collection separate from vector content).
+ */
+export interface CrawlLedgerPluginConfig {
+  /** Default off so existing installs behave the same */
+  enabled?: boolean;
+  /** Collection name (default: cms_crawl_ledger) */
+  collection?: string;
+  /** Skip re-crawl if last status was indexed and younger than this (default: 7 days) */
+  ttlMsIndexed?: number;
+  /** Skip re-crawl if last status was a failure and younger than this (default: 1 hour) */
+  ttlMsFailure?: number;
+  /**
+   * Skip re-crawl if last status was `error` (e.g. Playwright timeout) and younger than this.
+   * Shorter than ttlMsFailure so transient render errors retry sooner (default: 5 minutes).
+   */
+  ttlMsRenderError?: number;
+}
+
+/**
+ * Per-ingest crawl ledger options (merged over plugin.crawlLedger).
+ * To bypass skip-TTL for one run: pass `forceRecrawl: true` on IngestOptions (SDK).
+ */
+export interface CrawlLedgerOptions {
+  enabled?: boolean;
+  ttlMsIndexed?: number;
+  ttlMsFailure?: number;
+  ttlMsRenderError?: number;
+  /** Max rows in result.metadata.pageStatuses (default: 500) */
+  maxPageStatuses?: number;
+}
+
+export type CrawlLedgerStatus =
+  | 'indexed'
+  | 'skipped_ledger'
+  | 'too_small'
+  | 'non_html'
+  | 'blocked_suspected'
+  | 'error';
+
+export interface CrawlPageStatusEntry {
+  url: string;
+  urlNormalized?: string;
+  status: CrawlLedgerStatus;
+  modeUsed?: string;
+  contentLength?: number;
+  /** Raw-ish body text length before selector pick (debug) */
+  bodyTextLengthHint?: number;
+  title?: string;
+  docId?: string;
+  httpStatus?: number;
+  error?: string;
+  skippedReason?: string;
+}
+
+export interface CrawlLedgerDocument {
+  tenantId: string;
+  agentId: string;
+  urlNormalized: string;
+  url: string;
+  domain: string;
+  lastStatus: CrawlLedgerStatus;
+  lastCrawledAt: Date;
+  modeUsed?: string;
+  contentLength?: number;
+  title?: string;
+  docId?: string;
+  httpStatus?: number;
+  errorMessage?: string;
+  updatedAt: Date;
 }
 
 /**
@@ -218,10 +296,15 @@ export interface SitemapConfig {
   contentSelector?: string;  // CSS selector for main content (e.g., 'article', '.content')
   titleSelector?: string;    // CSS selector for title (default: 'h1, title')
   removeSelectors?: string[];  // Elements to remove (e.g., ['nav', 'footer', '.sidebar'])
+  /** Minimum cleaned text length to accept a page (default: 50) */
+  minExtractedContentLength?: number;
 
   // URL filtering
   includePatterns?: string[];  // Only crawl URLs matching these patterns
   excludePatterns?: string[];  // Skip URLs matching these patterns (e.g., ['/cart', '/admin'])
+
+  /** Strip query string for crawl ledger key (default: false) */
+  stripQueryParams?: boolean;
 
   // Type inference from URL
   typeFromUrl?: Record<string, string>;  // e.g., { '/blog/': 'blog', '/projects/': 'project' }
@@ -229,6 +312,26 @@ export interface SitemapConfig {
 
   // Additional metadata to add to all documents
   metadata?: Record<string, any>;
+
+  /**
+   * Rendering mode for JS-heavy sites
+   * - false: only static HTML fetch
+   * - true: always render with a headless browser
+   * - "auto": try static first, render as fallback when content is too small / looks dynamic
+   */
+  render?: boolean | 'auto';
+
+  /**
+   * Render options (used when render is true/auto)
+   */
+  renderOptions?: RenderOptions;
+
+  /**
+   * Debug/observability options
+   */
+  debug?: DebugOptions;
+
+  crawlLedger?: CrawlLedgerOptions;
 }
 
 /**
@@ -251,6 +354,127 @@ export interface UrlListConfig {
 
   // Additional metadata
   metadata?: Record<string, any>;
+
+  render?: boolean | 'auto';
+  renderOptions?: RenderOptions;
+  debug?: DebugOptions;
+
+  stripQueryParams?: boolean;
+  crawlLedger?: CrawlLedgerOptions;
+}
+
+/**
+ * Single page ingestion (no discovery)
+ */
+export interface SinglePageConfig {
+  url: string;
+
+  // Content extraction
+  contentSelector?: string;
+  titleSelector?: string;
+  removeSelectors?: string[];
+
+  // Crawling settings
+  timeout?: number; // Default: 30000
+
+  // Type inference or static type
+  type?: string; // Static type for this URL (default: 'page')
+  typeFromUrl?: Record<string, string>;
+
+  // Additional metadata
+  metadata?: Record<string, any>;
+
+  render?: boolean | 'auto';
+  renderOptions?: RenderOptions;
+  debug?: DebugOptions;
+
+  /** Ledger key normalization (default: true) */
+  stripQueryParams?: boolean;
+  crawlLedger?: CrawlLedgerOptions;
+}
+
+/**
+ * Website crawling configuration (no sitemap)
+ * Discovers internal links starting from a base URL and then crawls them.
+ */
+export interface WebsiteCrawlConfig {
+  // Entry point (e.g., 'https://example.com')
+  baseUrl: string;
+
+  // Discovery limits
+  maxPages?: number;        // Default: 100 (total pages to crawl)
+  maxDepth?: number;        // Default: 3 (link depth from baseUrl)
+
+  // Crawling settings (same meaning as sitemap crawling)
+  concurrency?: number;     // Default: 3
+  delayMs?: number;         // Default: 500 (delay between discovery batches and crawl batches)
+  timeout?: number;         // Default: 30000
+
+  // URL filtering
+  includePatterns?: string[];  // Only include URLs matching these patterns
+  excludePatterns?: string[];  // Skip URLs matching these patterns
+
+  // URL normalization
+  stripQueryParams?: boolean;  // Default: true (treat ?x=y as same page)
+
+  // Content extraction (same as sitemap crawling)
+  contentSelector?: string;
+  titleSelector?: string;
+  removeSelectors?: string[];
+
+  // Type inference from URL
+  typeFromUrl?: Record<string, string>;
+  defaultType?: string;  // Default: 'page'
+
+  // Additional metadata to add to all documents
+  metadata?: Record<string, any>;
+
+  render?: boolean | 'auto';
+  renderOptions?: RenderOptions;
+  debug?: DebugOptions;
+
+  crawlLedger?: CrawlLedgerOptions;
+}
+
+export interface RenderOptions {
+  /**
+   * Minimum extracted content length to accept from static crawl before falling back to render.
+   * Used only when render === "auto".
+   */
+  minContentLength?: number; // Default: 200
+
+  /**
+   * Navigation wait strategy for the headless browser.
+   */
+  waitUntil?: 'domcontentloaded' | 'load' | 'networkidle';
+
+  /**
+   * Optional selector that indicates the page's main content is ready.
+   */
+  waitForSelector?: string;
+
+  /**
+   * Scroll settings for infinite scroll pages.
+   */
+  scroll?: {
+    enabled?: boolean;
+    maxScrolls?: number;       // Default: 10
+    scrollDelayMs?: number;    // Default: 750
+    stableIterations?: number; // Default: 2 (stop when text doesn't grow)
+  };
+
+  /**
+   * Wait after navigation (and optional waitForSelector) before reading HTML.
+   * Helps WordPress/Elementor and other late-hydrated layouts.
+   */
+  postRenderDelayMs?: number;
+}
+
+export interface DebugOptions {
+  enabled?: boolean;
+  level?: 'summary' | 'verbose'; // Default: 'summary'
+  saveDir?: string; // If provided, save per-URL artifacts (html/txt/json)
+  maxPerUrlLogs?: number; // Default: 200 (cap verbose entries)
 }
 
 /**
