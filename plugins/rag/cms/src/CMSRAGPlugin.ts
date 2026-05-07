@@ -2057,11 +2057,57 @@ export class CMSRAGPlugin implements RAGPlugin {
 
   private looksLikeDynamicShell(html: string): boolean {
     const lower = html.toLowerCase();
-    if (lower.includes('please enable javascript')) return true;
-    if (lower.includes('id="__next"') || lower.includes('__next_data__')) return true;
-    if (lower.includes('id="root"') || lower.includes('id="app"')) return true;
-    if (lower.includes('loading') && lower.length < 20000) return true;
-    return false;
+
+    const bodyMatch = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+    const body = bodyMatch?.[1] ?? html;
+
+    const textOnly = body
+      .replace(/<script[\s\S]*?<\/script>/gi, '')
+      .replace(/<style[\s\S]*?<\/style>/gi, '')
+      .replace(/<noscript[\s\S]*?<\/noscript>/gi, '')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    const scriptCount = (body.match(/<script\b/gi) ?? []).length;
+
+    const hasEmptyAppMountNode =
+      /<(div|main)[^>]+id=["'](__next|root|app)["'][^>]*>\s*<\/\1>/i.test(body);
+
+    const hasHydrationData =
+      lower.includes('__next_data__') ||
+      lower.includes('__next_f') ||
+      lower.includes('window.__initial_state__') ||
+      lower.includes('window.__apollo_state__') ||
+      lower.includes('data-reactroot');
+
+    const asksForJavascript =
+      lower.includes('please enable javascript') ||
+      lower.includes('enable javascript to run this app') ||
+      lower.includes('you need to enable javascript');
+
+    const hasLoadingHints =
+      /\b(loading|please wait|spinner|initializing|fetching)\b/i.test(lower);
+
+    const textLength = textOnly.length;
+    const htmlLength = lower.length;
+    const contentDensity = textLength / Math.max(htmlLength, 1);
+
+    const isMostlyScripts = scriptCount >= 5 && textLength < 500;
+
+    const isSmallShellLike =
+      htmlLength < 50_000 &&
+      textLength < 500 &&
+      contentDensity < 0.02;
+
+    return (
+      asksForJavascript ||
+      hasEmptyAppMountNode ||
+      hasHydrationData ||
+      isMostlyScripts ||
+      isSmallShellLike ||
+      (hasLoadingHints && textLength < 1_000 && contentDensity < 0.05)
+    );
   }
 
   private diagFromRenderedAttempt(
