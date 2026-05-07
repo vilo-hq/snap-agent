@@ -1,18 +1,16 @@
 /**
- * CMS RAG - ingestFromWebsite() Example (Intelligent Crawl)
+ * Web RAG - ingestSinglePageFromUrl() Example
  *
- * This example tests the high-level website ingestion entrypoint:
- * - Discovery: robots.txt sitemaps -> sitemap candidates -> fallback link lookup
- * - Crawl: static first, optional render fallback (render: "auto" | true | false)
- * - Debug: counters + internal events + optional artifact saving
+ * Ingests exactly one URL: no sitemap, no link discovery.
+ * Same crawl pipeline as website ingest (static → optional render fallback).
  *
  * Run (from repo root):
- *   npx tsx sdk/examples/cms-rag/cms-ingest-website.ts https://www.example.com --maxPages=25 --maxDepth=2 --render=auto --debug
+ *   npx tsx sdk/examples/web-rag/web-ingest-single-page.ts https://www.example.com/path --render=auto --debug
  *
- * For SPA/lazy sites (requires Playwright installed):
- *   npx tsx sdk/examples/cms-ingest-website.ts https://quotes.toscrape.com/scroll --maxPages=10 --maxDepth=1 --render=auto --debug --saveDir=sdk/examples/out
+ * Force re-crawl ignoring ledger TTL:
+ *   npx tsx sdk/examples/web-rag/web-ingest-single-page.ts https://... --forceRecrawl
  */
-import { CMSRAGPlugin } from '../../../plugins/rag/cms/src/CMSRAGPlugin';
+import { WebRAGPlugin } from '../../../plugins/rag/cms/src/WebRAGPlugin';
 import dotenv from 'dotenv';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -41,9 +39,11 @@ function readRenderArg(): boolean | 'auto' {
 }
 
 async function main() {
-  const baseUrl = process.argv[2];
-  if (!baseUrl) {
-    console.error('Usage: npx tsx sdk/examples/cms-ingest-website.ts <baseUrl> [--maxPages=25] [--maxDepth=2] [--render=auto|true|false] [--debug] [--saveDir=path]');
+  const url = process.argv[2];
+  if (!url) {
+    console.error(
+      'Usage: npx tsx sdk/examples/web-rag/web-ingest-single-page.ts <url> [--render=auto|true|false] [--timeout=30000] [--debug] [--saveDir=path] [--forceRecrawl]'
+    );
     process.exit(1);
   }
 
@@ -51,8 +51,9 @@ async function main() {
   const saveDir = readArg('saveDir');
   const forceRecrawl = process.argv.includes('--forceRecrawl');
   const ledgerEnabled = process.env.CRAWL_LEDGER_ENABLED === 'true';
+  const agentId = process.env.AGENT_ID || 'shared';
 
-  const plugin = new CMSRAGPlugin({
+  const plugin = new WebRAGPlugin({
     mongoUri: process.env.MONGODB_URI || 'mongodb://localhost:27017/agents',
     dbName: process.env.MONGODB_DB || 'agents',
     tenantId: process.env.TENANT_ID || 'local',
@@ -60,7 +61,7 @@ async function main() {
     crawlLedger: ledgerEnabled
       ? {
         enabled: true,
-        collection: process.env.CRAWL_LEDGER_COLLECTION || 'cms_crawl_ledger',
+        collection: process.env.CRAWL_LEDGER_COLLECTION || 'web_crawl_ledger',
         ttlMsIndexed: process.env.CRAWL_LEDGER_TTL_INDEXED_MS
           ? Number(process.env.CRAWL_LEDGER_TTL_INDEXED_MS)
           : undefined,
@@ -74,41 +75,32 @@ async function main() {
       : undefined,
   } as any);
 
-  const maxPages = readIntArg('maxPages', 25);
-  const maxDepth = readIntArg('maxDepth', 2);
   const timeout = readIntArg('timeout', 30000);
-  const concurrency = readIntArg('concurrency', 3);
-  const delayMs = readIntArg('delayMs', 500);
   const render = readRenderArg();
 
-  console.log('Running ingestFromWebsite with:');
+  console.log('Running ingestSinglePageFromUrl with:');
   console.log(JSON.stringify({
-    baseUrl, maxPages, maxDepth, timeout, concurrency, delayMs, render, debugEnabled, saveDir,
-    ledgerEnabled, forceRecrawl,
+    url, timeout, render, debugEnabled, saveDir, ledgerEnabled, forceRecrawl, agentId,
   }, null, 2));
   console.log('');
 
-  const result = await plugin.ingestFromWebsite(
+  const result = await plugin.ingestSinglePageFromUrl(
     {
-      baseUrl,
-      maxPages,
-      maxDepth,
+      url,
       timeout,
-      concurrency,
-      delayMs,
       stripQueryParams: true,
       render,
       renderOptions: {
-        // If render === "auto", fallback to Playwright when static extract is too small
         minContentLength: 200,
         waitUntil: 'domcontentloaded',
         postRenderDelayMs: 1200,
         scroll: { enabled: true, maxScrolls: 12, scrollDelayMs: 750, stableIterations: 2 },
       },
-      // Optional extraction tuning
-      contentSelector: process.env.CONTENT_SELECTOR || 'article, main, .content, .post-content, #content, [role="main"]',
-      titleSelector: process.env.TITLE_SELECTOR || 'h1, title',
-      defaultType: process.env.DEFAULT_TYPE || 'page',
+      ...(process.env.CONTENT_SELECTOR
+        ? { contentSelector: process.env.CONTENT_SELECTOR }
+        : {}),
+      ...(process.env.TITLE_SELECTOR ? { titleSelector: process.env.TITLE_SELECTOR } : {}),
+      type: process.env.DEFAULT_TYPE || 'page',
       debug: debugEnabled
         ? {
           enabled: true,
@@ -118,10 +110,10 @@ async function main() {
         : undefined,
       crawlLedger: ledgerEnabled ? { enabled: true } : undefined,
     },
-    { overwrite: true, forceRecrawl }
+    { overwrite: true, forceRecrawl, agentId }
   );
 
-  console.log('Crawl result:\n');
+  console.log('Result:\n');
   console.log(JSON.stringify(
     {
       success: result.success,
@@ -141,7 +133,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error('ingestFromWebsite example failed:', err);
+  console.error('ingestSinglePageFromUrl example failed:', err);
   process.exit(1);
 });
-

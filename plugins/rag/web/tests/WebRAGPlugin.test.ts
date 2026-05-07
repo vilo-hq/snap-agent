@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { CMSRAGPlugin } from '../src/CMSRAGPlugin';
+import { WebRAGPlugin } from '../src/WebRAGPlugin';
 
 // Mock MongoDB (findOne / find for crawl ledger)
 const mongoLedger = vi.hoisted(() => {
@@ -58,14 +58,14 @@ vi.mock('openai', () => {
 const mockFetch = vi.fn();
 global.fetch = mockFetch;
 
-describe('CMSRAGPlugin', () => {
-  let plugin: CMSRAGPlugin;
+describe('WebRAGPlugin', () => {
+  let plugin: WebRAGPlugin;
 
   beforeEach(() => {
     vi.clearAllMocks();
     mongoLedger.mockFindOne.mockResolvedValue(null);
     mongoLedger.toArrayFind.mockResolvedValue([]);
-    plugin = new CMSRAGPlugin({
+    plugin = new WebRAGPlugin({
       mongoUri: 'mongodb://localhost:27017',
       dbName: 'test_db',
       openaiApiKey: 'test-key',
@@ -79,13 +79,13 @@ describe('CMSRAGPlugin', () => {
 
   describe('constructor', () => {
     it('should set default values', () => {
-      expect(plugin.name).toBe('cms-rag');
+      expect(plugin.name).toBe('web-rag');
       expect(plugin.type).toBe('rag');
       expect(plugin.priority).toBe(100);
     });
 
     it('should accept custom priority', () => {
-      const customPlugin = new CMSRAGPlugin({
+      const customPlugin = new WebRAGPlugin({
         mongoUri: 'mongodb://localhost:27017',
         dbName: 'test_db',
         openaiApiKey: 'test-key',
@@ -498,9 +498,9 @@ describe('CMSRAGPlugin', () => {
 
   describe('parseDrupalType', () => {
     it('should parse Drupal node types', () => {
-      expect(CMSRAGPlugin.parseDrupalType('node--project')).toBe('project');
-      expect(CMSRAGPlugin.parseDrupalType('node--team_member')).toBe('team_member');
-      expect(CMSRAGPlugin.parseDrupalType('project')).toBe('project');
+      expect(WebRAGPlugin.parseDrupalType('node--project')).toBe('project');
+      expect(WebRAGPlugin.parseDrupalType('node--team_member')).toBe('team_member');
+      expect(WebRAGPlugin.parseDrupalType('project')).toBe('project');
     });
   });
 
@@ -523,7 +523,7 @@ describe('CMSRAGPlugin', () => {
   describe('getConfig', () => {
     it('should return serializable config', () => {
       const config = plugin.getConfig();
-      expect(config.name).toBe('cms-rag');
+      expect(config.name).toBe('web-rag');
       expect(config.tenantId).toBe('test-tenant');
       expect(config.mongoUri).toBe('${MONGODB_URI}');
       expect(config.openaiApiKey).toBe('${OPENAI_API_KEY}');
@@ -532,7 +532,7 @@ describe('CMSRAGPlugin', () => {
 
   describe('type and recency boosts', () => {
     it('should accept type boosts configuration', () => {
-      const pluginWithBoosts = new CMSRAGPlugin({
+      const pluginWithBoosts = new WebRAGPlugin({
         mongoUri: 'mongodb://localhost:27017',
         dbName: 'test_db',
         openaiApiKey: 'test-key',
@@ -548,7 +548,7 @@ describe('CMSRAGPlugin', () => {
     });
 
     it('should accept recency boost configuration', () => {
-      const pluginWithRecency = new CMSRAGPlugin({
+      const pluginWithRecency = new WebRAGPlugin({
         mongoUri: 'mongodb://localhost:27017',
         dbName: 'test_db',
         openaiApiKey: 'test-key',
@@ -807,13 +807,13 @@ describe('CMSRAGPlugin', () => {
         },
       ];
 
-      const text = CMSRAGPlugin.sanityBlocksToText(blocks);
+      const text = WebRAGPlugin.sanityBlocksToText(blocks);
       expect(text).toBe('Hello World\n\nSecond paragraph.');
     });
 
     it('should handle empty or invalid input', () => {
-      expect(CMSRAGPlugin.sanityBlocksToText([])).toBe('');
-      expect(CMSRAGPlugin.sanityBlocksToText(null as any)).toBe('');
+      expect(WebRAGPlugin.sanityBlocksToText([])).toBe('');
+      expect(WebRAGPlugin.sanityBlocksToText(null as any)).toBe('');
     });
   });
 
@@ -1303,7 +1303,7 @@ describe('CMSRAGPlugin', () => {
         docId: 'abc',
       });
 
-      const ledgerPlugin = new CMSRAGPlugin({
+      const ledgerPlugin = new WebRAGPlugin({
         mongoUri: 'mongodb://localhost:27017',
         dbName: 'test_db',
         openaiApiKey: 'test-key',
@@ -1338,7 +1338,7 @@ describe('CMSRAGPlugin', () => {
       };
       mongoLedger.toArrayFind.mockResolvedValueOnce([row]);
 
-      const ledgerPlugin = new CMSRAGPlugin({
+      const ledgerPlugin = new WebRAGPlugin({
         mongoUri: 'mongodb://localhost:27017',
         dbName: 'test_db',
         openaiApiKey: 'test-key',

@@ -1,7 +1,7 @@
 /**
- * CMS RAG - crawlPage() Example (Debug / Quick Test)
+ * Web RAG - crawlPage() Example (Debug / Quick Test)
  *
- * This example calls the CMS RAG plugin's internal `crawlPage()` method directly
+ * This example calls the Web RAG plugin's internal `crawlPage()` method directly
  * to validate HTML extraction (title + main content) for a single URL.
  *
  * Notes:
@@ -9,10 +9,10 @@
  * - This example does NOT ingest/index into MongoDB (no embeddings, no storage writes).
  *
  * Run (from repo root):
- *   npx tsx sdk/examples/cms-crawlpage.ts https://example.com
+ *   npx tsx sdk/examples/web-crawlpage.ts https://example.com
  */
 
-import { CMSRAGPlugin } from '../../../plugins/rag/cms/src/CMSRAGPlugin';
+import { WebRAGPlugin } from '../../../plugins/rag/cms/src/WebRAGPlugin';
 import dotenv from 'dotenv';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -45,7 +45,7 @@ async function main() {
   const debugHtml = args.has('--debug-html') || args.has('--debug');
   const rendered = args.has('--render') || args.has('--rendered');
 
-  const plugin = new CMSRAGPlugin({
+  const plugin = new WebRAGPlugin({
     // These are required by the constructor, but are not used by crawlPage().
     mongoUri: process.env.MONGODB_URI || 'mongodb://localhost:27017/agents',
     dbName: process.env.MONGODB_DB || 'agents',
@@ -60,7 +60,7 @@ async function main() {
   if (debugHtml) {
     const response = await fetch(url, {
       headers: {
-        'User-Agent': 'SnapAgent-CMS-Crawler/1.0',
+        'User-Agent': 'SnapAgent-Web-Crawler/1.0',
         'Accept': 'text/html,application/xhtml+xml',
       },
       signal: AbortSignal.timeout(timeoutMs),
@@ -112,7 +112,7 @@ async function main() {
       '/help/': 'help',
     },
     metadata: {
-      source: 'cms-crawlpage-example',
+      source: 'web-crawlpage-example',
     },
   };
 

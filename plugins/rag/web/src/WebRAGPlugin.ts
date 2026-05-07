@@ -1,7 +1,7 @@
 /**
- * CMS RAG Plugin
+ * Web RAG Plugin
  * 
- * Schema-agnostic RAG plugin for any CMS content.
+ * Schema-agnostic RAG plugin for web content.
  * Works with Drupal, WordPress, Contentful, or any content source.
  * 
  * Key features:
@@ -28,12 +28,12 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import type {
-  CMSRAGConfig,
-  CMSDocument,
-  StoredCMSDocument,
+  WebRAGConfig,
+  WebDocument,
+  StoredWebDocument,
   URLSource,
-  CMSIngestResult,
-  CMSURLIngestResult,
+  WebIngestResult,
+  WebURLIngestResult,
   DrupalConfig,
   WordPressConfig,
   SanityConfig,
@@ -52,15 +52,15 @@ import type {
 } from './types';
 
 // ============================================================================
-// CMS RAG Plugin
+// Web RAG Plugin
 // ============================================================================
 
-export class CMSRAGPlugin implements RAGPlugin {
-  name = 'cms-rag';
+export class WebRAGPlugin implements RAGPlugin {
+  name = 'web-rag';
   type = 'rag' as const;
   priority: number;
 
-  private config: CMSRAGConfig;
+  private config: WebRAGConfig;
   private client: MongoClient | null = null;
   private db: Db | null = null;
   private openai: OpenAI;
@@ -69,11 +69,11 @@ export class CMSRAGPlugin implements RAGPlugin {
   private embeddingCache = new Map<string, { value: number[]; timestamp: number }>();
   private cacheStats = { hits: 0, misses: 0 };
 
-  constructor(config: CMSRAGConfig) {
+  constructor(config: WebRAGConfig) {
     this.config = {
-      collection: 'cms_content',
+      collection: 'web_content',
       embeddingModel: 'text-embedding-3-small',
-      vectorIndexName: 'cms_vector_index',
+      vectorIndexName: 'web_vector_index',
       numCandidates: 100,
       limit: 10,
       minScore: 0.7,
@@ -88,13 +88,13 @@ export class CMSRAGPlugin implements RAGPlugin {
   // MongoDB Connection
   // ============================================================================
 
-  private async getCollection(): Promise<Collection<StoredCMSDocument>> {
+  private async getCollection(): Promise<Collection<StoredWebDocument>> {
     if (!this.client) {
       this.client = new MongoClient(this.config.mongoUri);
       await this.client.connect();
       this.db = this.client.db(this.config.dbName);
     }
-    return this.db!.collection<StoredCMSDocument>(this.config.collection!);
+    return this.db!.collection<StoredWebDocument>(this.config.collection!);
   }
 
   private async getLedgerCollection(): Promise<Collection<CrawlLedgerDocument>> {
@@ -103,7 +103,7 @@ export class CMSRAGPlugin implements RAGPlugin {
       await this.client.connect();
       this.db = this.client.db(this.config.dbName);
     }
-    const name = this.config.crawlLedger?.collection ?? 'cms_crawl_ledger';
+    const name = this.config.crawlLedger?.collection ?? 'web_crawl_ledger';
     return this.db!.collection<CrawlLedgerDocument>(name);
   }
 
@@ -359,7 +359,7 @@ export class CMSRAGPlugin implements RAGPlugin {
   /**
    * Format retrieved content for LLM context
    */
-  private formatResultsToContext(docs: Array<StoredCMSDocument & { score: number }>): string {
+  private formatResultsToContext(docs: Array<StoredWebDocument & { score: number }>): string {
     if (docs.length === 0) {
       return 'No relevant content found.';
     }
@@ -411,7 +411,7 @@ export class CMSRAGPlugin implements RAGPlugin {
   private async vectorSearch(options: {
     queryVector: number[];
     hardFilters: Record<string, any>;
-  }): Promise<Array<StoredCMSDocument & { score: number }>> {
+  }): Promise<Array<StoredWebDocument & { score: number }>> {
     const collection = await this.getCollection();
 
     const pipeline: any[] = [
@@ -443,7 +443,7 @@ export class CMSRAGPlugin implements RAGPlugin {
 
     const results = await collection.aggregate(pipeline).toArray();
 
-    return results as Array<StoredCMSDocument & { score: number }>;
+    return results as Array<StoredWebDocument & { score: number }>;
   }
 
   // ============================================================================
@@ -696,7 +696,7 @@ export class CMSRAGPlugin implements RAGPlugin {
   async ingestFromUrl(
     source: URLSource,
     options?: IngestOptions
-  ): Promise<CMSURLIngestResult> {
+  ): Promise<WebURLIngestResult> {
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), source.timeout || 30000);
@@ -934,8 +934,8 @@ export class CMSRAGPlugin implements RAGPlugin {
   async ingestFromDrupal(
     config: DrupalConfig,
     options?: IngestOptions
-  ): Promise<CMSURLIngestResult[]> {
-    const results: CMSURLIngestResult[] = [];
+  ): Promise<WebURLIngestResult[]> {
+    const results: WebURLIngestResult[] = [];
 
     for (const contentType of config.contentTypes) {
       const url = `${config.baseUrl}/jsonapi/node/${contentType}`;
@@ -993,8 +993,8 @@ export class CMSRAGPlugin implements RAGPlugin {
   async ingestFromWordPress(
     config: WordPressConfig,
     options?: IngestOptions
-  ): Promise<CMSURLIngestResult[]> {
-    const results: CMSURLIngestResult[] = [];
+  ): Promise<WebURLIngestResult[]> {
+    const results: WebURLIngestResult[] = [];
     const postTypes = config.postTypes || ['posts', 'pages'];
     const perPage = config.perPage || 100;
     const maxPages = config.maxPages || 10;
@@ -1089,8 +1089,8 @@ export class CMSRAGPlugin implements RAGPlugin {
   async ingestFromSanity(
     config: SanityConfig,
     options?: IngestOptions
-  ): Promise<CMSURLIngestResult[]> {
-    const results: CMSURLIngestResult[] = [];
+  ): Promise<WebURLIngestResult[]> {
+    const results: WebURLIngestResult[] = [];
     const apiVersion = config.apiVersion || 'v2024-01-01';
     const useCdn = config.useCdn !== false;
 
@@ -1181,8 +1181,8 @@ export class CMSRAGPlugin implements RAGPlugin {
   async ingestFromStrapi(
     config: StrapiConfig,
     options?: IngestOptions
-  ): Promise<CMSURLIngestResult[]> {
-    const results: CMSURLIngestResult[] = [];
+  ): Promise<WebURLIngestResult[]> {
+    const results: WebURLIngestResult[] = [];
     const pageSize = config.pageSize || 100;
     const maxPages = config.maxPages || 10;
 
@@ -1996,7 +1996,7 @@ export class CMSRAGPlugin implements RAGPlugin {
   /** Longest cleaned text among selector matches and full body (after noise strip). */
   private extractBestContentText($: cheerio.CheerioAPI, config: SitemapConfig): string {
     const contentSelector =
-      config.contentSelector || CMSRAGPlugin.DEFAULT_CONTENT_SELECTOR;
+      config.contentSelector || WebRAGPlugin.DEFAULT_CONTENT_SELECTOR;
     const selectors = contentSelector.split(',').map(s => s.trim()).filter(Boolean);
     let best = '';
     for (const sel of selectors) {
@@ -2151,7 +2151,7 @@ export class CMSRAGPlugin implements RAGPlugin {
       renderMode: boolean | 'auto';
       renderOptions: RenderOptions;
       minContentLength: number;
-      dbg: ReturnType<CMSRAGPlugin['createDebugCollector']>;
+      dbg: ReturnType<WebRAGPlugin['createDebugCollector']>;
     }
   ): Promise<{
     doc: RAGDocument | null;
@@ -2254,7 +2254,7 @@ export class CMSRAGPlugin implements RAGPlugin {
     config: SitemapConfig,
     timeout: number,
     renderOptions: RenderOptions,
-    dbg: ReturnType<CMSRAGPlugin['createDebugCollector']>
+    dbg: ReturnType<WebRAGPlugin['createDebugCollector']>
   ): Promise<{
     doc: RAGDocument | null;
     bodyTextLengthHint: number;
@@ -2342,7 +2342,7 @@ export class CMSRAGPlugin implements RAGPlugin {
   private async discoverSitemaps(
     baseUrl: string,
     timeout: number,
-    dbg: ReturnType<CMSRAGPlugin['createDebugCollector']>
+    dbg: ReturnType<WebRAGPlugin['createDebugCollector']>
   ): Promise<string[]> {
     const base = new URL(baseUrl);
     const robotsUrl = new URL('/robots.txt', base).toString();

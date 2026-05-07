@@ -1,7 +1,7 @@
 {
-  "name": "@snap-agent/rag-cms",
-  "version": "0.1.4",
-  "description": "CMS RAG plugin for SnapAgent SDK - Schema-agnostic content search for Drupal, WordPress, and any CMS",
+  "name": "@snap-agent/rag-web",
+  "version": "0.1.0",
+  "description": "Web RAG plugin for SnapAgent SDK - Schema-agnostic content search via web crawling, CMS APIs, sitemaps, and RSS feeds",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
@@ -26,10 +26,12 @@
   },
   "keywords": [
     "rag",
+    "web",
+    "crawl",
+    "sitemap",
     "cms",
     "drupal",
     "wordpress",
-    "contentful",
     "vector-search",
     "content",
     "ai",
@@ -59,9 +61,9 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/vilo-hq/snap-agent.git",
-    "directory": "plugins/rag/cms"
+    "directory": "plugins/rag/web"
   },
-  "homepage": "https://github.com/vilo-hq/snap-agent/tree/main/plugins/rag/cms",
+  "homepage": "https://github.com/vilo-hq/snap-agent/tree/main/plugins/rag/web",
   "bugs": {
     "url": "https://github.com/vilo-hq/snap-agent/issues"
   }

@@ -1,6 +1,6 @@
 // ============================================================================
-// CMS RAG Plugin Types
-// Schema-agnostic content types for any CMS
+// Web RAG Plugin Types
+// Schema-agnostic content types for web sources
 // ============================================================================
 
 /**
@@ -13,7 +13,7 @@
  * 
  * Everything else in metadata is pass-through - store any fields you need.
  */
-export interface CMSDocument {
+export interface WebDocument {
   id: string;
   content: string;
   metadata: {
@@ -27,7 +27,7 @@ export interface CMSDocument {
 /**
  * Stored document with embedding and system fields
  */
-export interface StoredCMSDocument extends CMSDocument {
+export interface StoredWebDocument extends WebDocument {
   tenantId: string;
   agentId?: string;
   embedding: number[];
@@ -38,11 +38,11 @@ export interface StoredCMSDocument extends CMSDocument {
 /**
  * Plugin configuration
  */
-export interface CMSRAGConfig {
+export interface WebRAGConfig {
   // MongoDB connection
   mongoUri: string;
   dbName: string;
-  collection?: string;  // Default: 'cms_content'
+  collection?: string;  // Default: 'web_content'
 
   // AI configuration
   openaiApiKey: string;
@@ -52,7 +52,7 @@ export interface CMSRAGConfig {
   tenantId: string;
 
   // Search configuration
-  vectorIndexName?: string;  // Default: 'cms_vector_index'
+  vectorIndexName?: string;  // Default: 'web_vector_index'
   numCandidates?: number;    // Default: 100
   limit?: number;            // Default: 10
   minScore?: number;         // Default: 0.7
@@ -96,7 +96,7 @@ export interface CMSRAGConfig {
 export interface CrawlLedgerPluginConfig {
   /** Default off so existing installs behave the same */
   enabled?: boolean;
-  /** Collection name (default: cms_crawl_ledger) */
+  /** Collection name (default: web_crawl_ledger) */
   collection?: string;
   /** Skip re-crawl if last status was indexed and younger than this (default: 7 days) */
   ttlMsIndexed?: number;
@@ -498,7 +498,7 @@ export interface RSSConfig {
 /**
  * Crawl result for sitemap/URL crawling
  */
-export interface CrawlResult extends CMSIngestResult {
+export interface CrawlResult extends WebIngestResult {
   urlsCrawled: number;
   urlsSkipped: number;
   urlsFailed: number;
@@ -508,7 +508,7 @@ export interface CrawlResult extends CMSIngestResult {
 /**
  * Ingest result
  */
-export interface CMSIngestResult {
+export interface WebIngestResult {
   success: boolean;
   indexed: number;
   failed: number;
@@ -519,7 +519,7 @@ export interface CMSIngestResult {
 /**
  * URL ingest result
  */
-export interface CMSURLIngestResult extends CMSIngestResult {
+export interface WebURLIngestResult extends WebIngestResult {
   sourceUrl: string;
   fetchedAt: Date;
   documentsFetched: number;

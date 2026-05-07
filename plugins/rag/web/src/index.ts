@@ -1,8 +1,8 @@
-export { CMSRAGPlugin } from './CMSRAGPlugin';
+export { WebRAGPlugin } from './WebRAGPlugin';
 export type {
-  CMSRAGConfig,
-  CMSDocument,
-  StoredCMSDocument,
+  WebRAGConfig,
+  WebDocument,
+  StoredWebDocument,
   URLSource,
   URLSourceAuth,
   DataTransform,
@@ -23,7 +23,7 @@ export type {
   CrawlPageStatusEntry,
   RSSConfig,
   CrawlResult,
-  CMSIngestResult,
-  CMSURLIngestResult,
+  WebIngestResult,
+  WebURLIngestResult,
 } from './types';
 

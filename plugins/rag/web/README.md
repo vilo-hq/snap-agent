@@ -1,6 +1,6 @@
-# @snap-agent/rag-cms
+# @snap-agent/rag-web
 
-Schema-agnostic CMS RAG plugin for SnapAgent SDK. Build chatbots for any website content — Drupal, WordPress, Contentful, or custom CMS.
+Schema-agnostic Web RAG plugin for SnapAgent SDK. Build chatbots for any website content — Drupal, WordPress, Contentful, or custom CMS.
 
 ## Features
 
@@ -15,16 +15,16 @@ Schema-agnostic CMS RAG plugin for SnapAgent SDK. Build chatbots for any website
 ## Installation
 
 ```bash
-npm install @snap-agent/rag-cms @snap-agent/core mongodb
+npm install @snap-agent/rag-web @snap-agent/core mongodb
 ```
 
 ## Quick Start
 
 ```typescript
 import { createClient, MemoryStorage } from '@snap-agent/core';
-import { CMSRAGPlugin } from '@snap-agent/rag-cms';
+import { WebRAGPlugin } from '@snap-agent/rag-web';
 
-const cmsPlugin = new CMSRAGPlugin({
+const cmsPlugin = new WebRAGPlugin({
   mongoUri: process.env.MONGODB_URI!,
   dbName: 'my_website',
   openaiApiKey: process.env.OPENAI_API_KEY!,
@@ -53,7 +53,7 @@ const agent = await client.createAgent({
 Only three fields are required:
 
 ```typescript
-interface CMSDocument {
+interface WebDocument {
   id: string;                    // Unique identifier
   content: string;               // Text to embed and search
   metadata: {
@@ -205,7 +205,7 @@ await cmsPlugin.ingestFromSanity({
 });
 
 // Convert Portable Text to plain text
-const plainText = CMSRAGPlugin.sanityBlocksToText(portableTextBlocks);
+const plainText = WebRAGPlugin.sanityBlocksToText(portableTextBlocks);
 ```
 
 **Features:**
@@ -396,14 +396,14 @@ await cmsPlugin.ingestFromUrl({
 ## Configuration
 
 ```typescript
-const cmsPlugin = new CMSRAGPlugin({
+const cmsPlugin = new WebRAGPlugin({
   // Required
   mongoUri: process.env.MONGODB_URI!,
   dbName: 'my_website',
   openaiApiKey: process.env.OPENAI_API_KEY!,
   tenantId: 'my-company',
 
-  // Collection name (default: 'cms_content')
+  // Collection name (default: 'web_content')
   collection: 'website_content',
 
   // Embedding model (default: 'text-embedding-3-small')
@@ -493,7 +493,7 @@ Create a vector search index in MongoDB Atlas:
 
 ```json
 {
-  "name": "cms_vector_index",
+  "name": "web_vector_index",
   "type": "vectorSearch",
   "definition": {
     "fields": [
@@ -562,8 +562,8 @@ Create a vector search index in MongoDB Atlas:
 | `getCacheStats()` | Get embedding cache statistics |
 | `clearCache()` | Clear the embedding cache |
 | `disconnect()` | Close MongoDB connection |
-| `CMSRAGPlugin.sanityBlocksToText(blocks)` | Convert Portable Text to plain text |
-| `CMSRAGPlugin.parseDrupalType(type)` | Parse Drupal node type |
+| `WebRAGPlugin.sanityBlocksToText(blocks)` | Convert Portable Text to plain text |
+| `WebRAGPlugin.parseDrupalType(type)` | Parse Drupal node type |
 
 ## License
 
