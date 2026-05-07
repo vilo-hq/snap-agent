@@ -1,7 +1,7 @@
 /**
- * CMS RAG Plugin
+ * Web RAG Plugin
  * 
- * Schema-agnostic RAG plugin for any CMS content.
+ * Schema-agnostic RAG plugin for web content.
  * Works with Drupal, WordPress, Contentful, or any content source.
  * 
  * Key features:
@@ -24,34 +24,43 @@ import type {
 import { MongoClient, Db, Collection } from 'mongodb';
 import OpenAI from 'openai';
 import * as cheerio from 'cheerio';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 
 import type {
-  CMSRAGConfig,
-  CMSDocument,
-  StoredCMSDocument,
+  WebRAGConfig,
+  WebDocument,
+  StoredWebDocument,
   URLSource,
-  CMSIngestResult,
-  CMSURLIngestResult,
+  WebIngestResult,
+  WebURLIngestResult,
   DrupalConfig,
   WordPressConfig,
   SanityConfig,
   StrapiConfig,
   SitemapConfig,
   UrlListConfig,
+  SinglePageConfig,
+  WebsiteCrawlConfig,
+  RenderOptions,
+  DebugOptions,
+  CrawlLedgerDocument,
+  CrawlLedgerStatus,
+  CrawlPageStatusEntry,
   RSSConfig,
   CrawlResult,
 } from './types';
 
 // ============================================================================
-// CMS RAG Plugin
+// Web RAG Plugin
 // ============================================================================
 
-export class CMSRAGPlugin implements RAGPlugin {
-  name = 'cms-rag';
+export class WebRAGPlugin implements RAGPlugin {
+  name = 'web-rag';
   type = 'rag' as const;
   priority: number;
 
-  private config: CMSRAGConfig;
+  private config: WebRAGConfig;
   private client: MongoClient | null = null;
   private db: Db | null = null;
   private openai: OpenAI;
@@ -60,11 +69,11 @@ export class CMSRAGPlugin implements RAGPlugin {
   private embeddingCache = new Map<string, { value: number[]; timestamp: number }>();
   private cacheStats = { hits: 0, misses: 0 };
 
-  constructor(config: CMSRAGConfig) {
+  constructor(config: WebRAGConfig) {
     this.config = {
-      collection: 'cms_content',
+      collection: 'web_content',
       embeddingModel: 'text-embedding-3-small',
-      vectorIndexName: 'cms_vector_index',
+      vectorIndexName: 'web_vector_index',
       numCandidates: 100,
       limit: 10,
       minScore: 0.7,
@@ -79,13 +88,177 @@ export class CMSRAGPlugin implements RAGPlugin {
   // MongoDB Connection
   // ============================================================================
 
-  private async getCollection(): Promise<Collection<StoredCMSDocument>> {
+  private async getCollection(): Promise<Collection<StoredWebDocument>> {
     if (!this.client) {
       this.client = new MongoClient(this.config.mongoUri);
       await this.client.connect();
       this.db = this.client.db(this.config.dbName);
     }
-    return this.db!.collection<StoredCMSDocument>(this.config.collection!);
+    return this.db!.collection<StoredWebDocument>(this.config.collection!);
+  }
+
+  private async getLedgerCollection(): Promise<Collection<CrawlLedgerDocument>> {
+    if (!this.client) {
+      this.client = new MongoClient(this.config.mongoUri);
+      await this.client.connect();
+      this.db = this.client.db(this.config.dbName);
+    }
+    const name = this.config.crawlLedger?.collection ?? 'web_crawl_ledger';
+    return this.db!.collection<CrawlLedgerDocument>(name);
+  }
+
+  /**
+   * List recent crawl ledger rows (for dashboards / pagination in the front).
+   */
+  async listCrawlLedger(options: {
+    agentId?: string;
+    domain?: string;
+    status?: CrawlLedgerStatus;
+    limit?: number;
+    skip?: number;
+  } = {}): Promise<CrawlLedgerDocument[]> {
+    const col = await this.getLedgerCollection();
+    const filter: Record<string, unknown> = { tenantId: this.config.tenantId };
+    filter.agentId = options.agentId ?? 'shared';
+    if (options.domain) filter.domain = options.domain;
+    if (options.status) filter.lastStatus = options.status;
+    const limit = Math.min(Math.max(options.limit ?? 50, 1), 500);
+    const skip = Math.max(options.skip ?? 0, 0);
+    return col.find(filter).sort({ lastCrawledAt: -1 }).skip(skip).limit(limit).toArray();
+  }
+
+  private resolveCrawlLedgerOptions(
+    config: SitemapConfig & { defaultType?: string }
+  ): {
+    ttlMsIndexed: number;
+    ttlMsFailure: number;
+    ttlMsRenderError: number;
+    maxPageStatuses: number;
+    stripQuery: boolean;
+  } | null {
+    const plugin = this.config.crawlLedger;
+    const per = config.crawlLedger;
+    const enabled = per?.enabled ?? plugin?.enabled ?? false;
+    if (!enabled) return null;
+    const ttlMsFailure = per?.ttlMsFailure ?? plugin?.ttlMsFailure ?? 60 * 60 * 1000;
+    return {
+      ttlMsIndexed: per?.ttlMsIndexed ?? plugin?.ttlMsIndexed ?? 7 * 24 * 60 * 60 * 1000,
+      ttlMsFailure,
+      ttlMsRenderError: per?.ttlMsRenderError ?? plugin?.ttlMsRenderError ?? 5 * 60 * 1000,
+      maxPageStatuses: per?.maxPageStatuses ?? 500,
+      stripQuery: config.stripQueryParams ?? false,
+    };
+  }
+
+  private normalizeLedgerUrl(url: string, stripQuery: boolean): string | null {
+    return this.normalizeWebsiteUrl(url, stripQuery);
+  }
+
+  private shouldSkipLedger(
+    entry: CrawlLedgerDocument | null | undefined,
+    ttlMsIndexed: number,
+    ttlMsFailure: number,
+    ttlMsRenderError: number,
+    forceRecrawl: boolean
+  ): boolean {
+    if (forceRecrawl || !entry) return false;
+    const t = entry.lastCrawledAt instanceof Date
+      ? entry.lastCrawledAt.getTime()
+      : new Date(entry.lastCrawledAt as unknown as string).getTime();
+    const age = Date.now() - t;
+    if (entry.lastStatus === 'indexed' && age < ttlMsIndexed) return true;
+    if (entry.lastStatus === 'error' && age < ttlMsRenderError) return true;
+    if (entry.lastStatus !== 'indexed' && entry.lastStatus !== 'error' && age < ttlMsFailure) {
+      return true;
+    }
+    return false;
+  }
+
+  private async findLedgerEntry(
+    urlNormalized: string,
+    agentId: string
+  ): Promise<CrawlLedgerDocument | null> {
+    const col = await this.getLedgerCollection();
+    return col.findOne({
+      tenantId: this.config.tenantId,
+      agentId,
+      urlNormalized,
+    });
+  }
+
+  private toLedgerStatus(
+    doc: RAGDocument | null,
+    diag?: { modeUsed?: string; reason?: string }
+  ): CrawlLedgerStatus {
+    if (doc) return 'indexed';
+    if (diag?.reason === 'non_html') return 'non_html';
+    if (diag?.reason === 'blocked_suspected') return 'blocked_suspected';
+    if (diag?.reason === 'render_error') return 'error';
+    return 'too_small';
+  }
+
+  private async upsertLedgerRecord(params: {
+    url: string;
+    urlNormalized: string;
+    agentId: string;
+    status: CrawlLedgerStatus;
+    doc?: RAGDocument | null;
+    diag?: { modeUsed?: string; reason?: string; errorMessage?: string };
+    errorMessage?: string;
+  }): Promise<void> {
+    const col = await this.getLedgerCollection();
+    let domain = '';
+    try {
+      domain = new URL(params.url).hostname;
+    } catch {
+      domain = '';
+    }
+    const now = new Date();
+    const errMsg = params.errorMessage ?? params.diag?.errorMessage;
+    const $set: Record<string, unknown> = {
+      tenantId: this.config.tenantId,
+      agentId: params.agentId,
+      urlNormalized: params.urlNormalized,
+      url: params.url,
+      domain,
+      lastStatus: params.status,
+      lastCrawledAt: now,
+      updatedAt: now,
+    };
+    if (errMsg !== undefined) {
+      $set.errorMessage = errMsg;
+    } else if (params.status === 'indexed' && params.doc) {
+      $set.errorMessage = null;
+    }
+    if (params.doc) {
+      $set.modeUsed = params.diag?.modeUsed;
+      $set.contentLength = params.doc.content.length;
+      $set.title = params.doc.metadata?.title;
+      $set.docId = params.doc.id;
+    } else {
+      $set.modeUsed = params.diag?.modeUsed;
+      $set.contentLength = null;
+      $set.title = null;
+      $set.docId = null;
+    }
+    await col.updateOne(
+      {
+        tenantId: this.config.tenantId,
+        agentId: params.agentId,
+        urlNormalized: params.urlNormalized,
+      },
+      { $set },
+      { upsert: true }
+    );
+  }
+
+  private pushPageStatus(
+    list: CrawlPageStatusEntry[],
+    max: number,
+    entry: CrawlPageStatusEntry
+  ): void {
+    list.push(entry);
+    while (list.length > max) list.shift();
   }
 
   async disconnect(): Promise<void> {
@@ -186,7 +359,7 @@ export class CMSRAGPlugin implements RAGPlugin {
   /**
    * Format retrieved content for LLM context
    */
-  private formatResultsToContext(docs: Array<StoredCMSDocument & { score: number }>): string {
+  private formatResultsToContext(docs: Array<StoredWebDocument & { score: number }>): string {
     if (docs.length === 0) {
       return 'No relevant content found.';
     }
@@ -238,7 +411,7 @@ export class CMSRAGPlugin implements RAGPlugin {
   private async vectorSearch(options: {
     queryVector: number[];
     hardFilters: Record<string, any>;
-  }): Promise<Array<StoredCMSDocument & { score: number }>> {
+  }): Promise<Array<StoredWebDocument & { score: number }>> {
     const collection = await this.getCollection();
 
     const pipeline: any[] = [
@@ -270,7 +443,7 @@ export class CMSRAGPlugin implements RAGPlugin {
 
     const results = await collection.aggregate(pipeline).toArray();
 
-    return results as Array<StoredCMSDocument & { score: number }>;
+    return results as Array<StoredWebDocument & { score: number }>;
   }
 
   // ============================================================================
@@ -523,7 +696,7 @@ export class CMSRAGPlugin implements RAGPlugin {
   async ingestFromUrl(
     source: URLSource,
     options?: IngestOptions
-  ): Promise<CMSURLIngestResult> {
+  ): Promise<WebURLIngestResult> {
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), source.timeout || 30000);
@@ -761,8 +934,8 @@ export class CMSRAGPlugin implements RAGPlugin {
   async ingestFromDrupal(
     config: DrupalConfig,
     options?: IngestOptions
-  ): Promise<CMSURLIngestResult[]> {
-    const results: CMSURLIngestResult[] = [];
+  ): Promise<WebURLIngestResult[]> {
+    const results: WebURLIngestResult[] = [];
 
     for (const contentType of config.contentTypes) {
       const url = `${config.baseUrl}/jsonapi/node/${contentType}`;
@@ -820,8 +993,8 @@ export class CMSRAGPlugin implements RAGPlugin {
   async ingestFromWordPress(
     config: WordPressConfig,
     options?: IngestOptions
-  ): Promise<CMSURLIngestResult[]> {
-    const results: CMSURLIngestResult[] = [];
+  ): Promise<WebURLIngestResult[]> {
+    const results: WebURLIngestResult[] = [];
     const postTypes = config.postTypes || ['posts', 'pages'];
     const perPage = config.perPage || 100;
     const maxPages = config.maxPages || 10;
@@ -916,8 +1089,8 @@ export class CMSRAGPlugin implements RAGPlugin {
   async ingestFromSanity(
     config: SanityConfig,
     options?: IngestOptions
-  ): Promise<CMSURLIngestResult[]> {
-    const results: CMSURLIngestResult[] = [];
+  ): Promise<WebURLIngestResult[]> {
+    const results: WebURLIngestResult[] = [];
     const apiVersion = config.apiVersion || 'v2024-01-01';
     const useCdn = config.useCdn !== false;
 
@@ -1008,8 +1181,8 @@ export class CMSRAGPlugin implements RAGPlugin {
   async ingestFromStrapi(
     config: StrapiConfig,
     options?: IngestOptions
-  ): Promise<CMSURLIngestResult[]> {
-    const results: CMSURLIngestResult[] = [];
+  ): Promise<WebURLIngestResult[]> {
+    const results: WebURLIngestResult[] = [];
     const pageSize = config.pageSize || 100;
     const maxPages = config.maxPages || 10;
 
@@ -1184,6 +1357,130 @@ export class CMSRAGPlugin implements RAGPlugin {
   }
 
   /**
+   * Ingest content from a website that has no sitemap (or sitemap is incomplete).
+   * Discovers internal links from `baseUrl` (BFS) and then crawls the discovered URLs.
+   *
+   * This uses the same extraction pipeline as `ingestFromSitemap()` (via `crawlPage()`).
+   */
+  async ingestFromWebsite(
+    config: WebsiteCrawlConfig,
+    options?: IngestOptions
+  ): Promise<CrawlResult> {
+    const maxPages = config.maxPages ?? 100;
+    const maxDepth = config.maxDepth ?? 3;
+    const concurrency = config.concurrency ?? 3;
+    const delayMs = config.delayMs ?? 500;
+    const timeout = config.timeout ?? 30000;
+    const stripQueryParams = config.stripQueryParams ?? true;
+
+    if (!config.baseUrl) {
+      return {
+        success: false,
+        indexed: 0,
+        failed: 0,
+        urlsCrawled: 0,
+        urlsSkipped: 0,
+        urlsFailed: 0,
+        crawledAt: new Date(),
+        errors: [{ id: 'config', error: 'baseUrl is required' }],
+      };
+    }
+
+    const dbg = this.createDebugCollector(config.debug);
+
+    const base = this.normalizeWebsiteUrl(config.baseUrl, stripQueryParams);
+    if (!base) {
+      return {
+        success: false,
+        indexed: 0,
+        failed: 0,
+        urlsCrawled: 0,
+        urlsSkipped: 0,
+        urlsFailed: 0,
+        crawledAt: new Date(),
+        errors: [{ id: 'config', error: 'Invalid baseUrl' }],
+      };
+    }
+
+    // 1) Try robots.txt sitemaps, then common sitemap candidates
+    const discoveredSitemaps = await this.discoverSitemaps(base, timeout, dbg);
+    dbg.log('discovery.sitemaps', { baseUrl: base, sitemaps: discoveredSitemaps });
+
+    let urlsToCrawl: string[] = [];
+    let urlsSkipped = 0;
+
+    for (const sm of discoveredSitemaps) {
+      const urls = await this.parseSitemap(sm, {
+        sitemapUrl: sm,
+        timeout,
+      });
+      if (urls.length > 0) {
+        dbg.log('discovery.sitemapParsed', { sitemapUrl: sm, urlCount: urls.length });
+
+        let filteredUrls = urls;
+        if (config.includePatterns?.length) {
+          filteredUrls = filteredUrls.filter(u => config.includePatterns!.some(p => u.includes(p)));
+        }
+        if (config.excludePatterns?.length) {
+          filteredUrls = filteredUrls.filter(u => !config.excludePatterns!.some(p => u.includes(p)));
+        }
+
+        urlsToCrawl = filteredUrls.slice(0, maxPages);
+        urlsSkipped = Math.max(0, filteredUrls.length - urlsToCrawl.length);
+        break;
+      }
+    }
+
+    // 2) Fallback: link lookup (BFS) if sitemap yielded nothing
+    if (urlsToCrawl.length === 0) {
+      dbg.log('discovery.fallback', { reason: 'no_sitemap_urls', method: 'link_lookup' });
+      const discovery = await this.discoverInternalUrls({
+        baseUrl: base,
+        maxPages,
+        maxDepth,
+        concurrency,
+        delayMs,
+        timeout,
+        includePatterns: config.includePatterns,
+        excludePatterns: config.excludePatterns,
+        stripQueryParams,
+      });
+      urlsToCrawl = discovery.urls;
+      urlsSkipped = discovery.skipped;
+      dbg.log('discovery.linkLookup', { discovered: urlsToCrawl.length, skipped: urlsSkipped });
+    }
+
+    const result = await this.crawlUrls(urlsToCrawl, {
+      contentSelector: config.contentSelector,
+      titleSelector: config.titleSelector,
+      removeSelectors: config.removeSelectors,
+      concurrency,
+      delayMs,
+      timeout,
+      typeFromUrl: config.typeFromUrl,
+      defaultType: config.defaultType ?? 'page',
+      metadata: config.metadata,
+      includePatterns: config.includePatterns,
+      excludePatterns: config.excludePatterns,
+      stripQueryParams,
+      render: config.render,
+      renderOptions: config.renderOptions,
+      debug: config.debug,
+      crawlLedger: config.crawlLedger,
+    }, options);
+
+    return {
+      ...result,
+      urlsSkipped,
+      crawledAt: new Date(),
+      metadata: {
+        ...(result.metadata || {}),
+        discoveryDebug: dbg.summary(),
+      },
+    };
+  }
+
+  /**
    * Parse sitemap XML and extract URLs
    */
   private async parseSitemap(
@@ -1243,6 +1540,142 @@ export class CMSRAGPlugin implements RAGPlugin {
     return urls;
   }
 
+  private async discoverInternalUrls(input: {
+    baseUrl: string;
+    maxPages: number;
+    maxDepth: number;
+    concurrency: number;
+    delayMs: number;
+    timeout: number;
+    includePatterns?: string[];
+    excludePatterns?: string[];
+    stripQueryParams: boolean;
+  }): Promise<{ urls: string[]; skipped: number }> {
+    const start = this.normalizeWebsiteUrl(input.baseUrl, input.stripQueryParams);
+    if (!start) return { urls: [], skipped: 0 };
+
+    const startUrl = new URL(start);
+    const visited = new Set<string>();
+    const queue: Array<{ url: string; depth: number }> = [{ url: startUrl.toString(), depth: 0 }];
+    const discovered: string[] = [];
+
+    let skipped = 0;
+
+    while (queue.length > 0 && discovered.length < input.maxPages) {
+      const batch = queue.splice(0, input.concurrency);
+
+      const results = await Promise.allSettled(
+        batch.map(async ({ url, depth }) => {
+          if (visited.has(url)) return { url, depth, links: [] as string[] };
+          visited.add(url);
+
+          if (depth > input.maxDepth) return { url, depth, links: [] as string[] };
+
+          // Apply include/exclude filters before fetching
+          if (input.includePatterns?.length && !input.includePatterns.some(p => url.includes(p))) {
+            skipped++;
+            return { url, depth, links: [] as string[] };
+          }
+          if (input.excludePatterns?.length && input.excludePatterns.some(p => url.includes(p))) {
+            skipped++;
+            return { url, depth, links: [] as string[] };
+          }
+
+          discovered.push(url);
+
+          // Stop discovery early if we've hit the page limit
+          if (discovered.length >= input.maxPages) return { url, depth, links: [] as string[] };
+
+          try {
+            const html = await this.fetchHtml(url, input.timeout);
+            if (!html) return { url, depth, links: [] as string[] };
+            const links = this.extractInternalLinks(html, startUrl, input.stripQueryParams);
+            return { url, depth, links };
+          } catch {
+            // Discovery errors shouldn't block the overall crawl
+            return { url, depth, links: [] as string[] };
+          }
+        })
+      );
+
+      for (const r of results) {
+        if (r.status !== 'fulfilled') continue;
+        const { depth, links } = r.value;
+        const nextDepth = depth + 1;
+        if (nextDepth > input.maxDepth) continue;
+        for (const link of links) {
+          if (discovered.length + queue.length >= input.maxPages * 3) continue; // small safety cap
+          if (visited.has(link)) continue;
+          queue.push({ url: link, depth: nextDepth });
+        }
+      }
+
+      if (queue.length > 0 && discovered.length < input.maxPages) {
+        await this.delay(input.delayMs);
+      }
+    }
+
+    // If we hit maxPages during discovery, count remaining queued URLs as skipped (they were discoverable but not crawled)
+    if (discovered.length >= input.maxPages) {
+      skipped += queue.length;
+    }
+
+    return { urls: discovered.slice(0, input.maxPages), skipped };
+  }
+
+  private normalizeWebsiteUrl(inputUrl: string, stripQueryParams: boolean): string | null {
+    try {
+      const u = new URL(inputUrl);
+      u.hash = '';
+      if (stripQueryParams) u.search = '';
+      return u.toString();
+    } catch {
+      return null;
+    }
+  }
+
+  private async fetchHtml(url: string, timeout: number): Promise<string | null> {
+    const response = await fetch(url, {
+      headers: {
+        'User-Agent': 'SnapAgent-CMS-Crawler/1.0',
+        'Accept': 'text/html,application/xhtml+xml',
+      },
+      signal: AbortSignal.timeout(timeout),
+    });
+
+    if (!response.ok) return null;
+
+    const contentType = response.headers.get('content-type') || '';
+    if (!contentType.includes('text/html')) return null;
+
+    return await response.text();
+  }
+
+  private extractInternalLinks(html: string, base: URL, stripQueryParams: boolean): string[] {
+    const $ = cheerio.load(html);
+    const links = new Set<string>();
+
+    $('a[href]').each((_, el) => {
+      const href = ($(el).attr('href') || '').trim();
+      if (!href) return;
+      if (href.startsWith('mailto:') || href.startsWith('tel:') || href.startsWith('javascript:')) return;
+
+      try {
+        const u = new URL(href, base);
+        // Same origin only
+        if (u.origin !== base.origin) return;
+        u.hash = '';
+        if (stripQueryParams) u.search = '';
+
+        links.add(u.toString());
+      } catch {
+        // ignore invalid URLs
+      }
+    });
+
+    return Array.from(links);
+  }
+
   /**
    * Ingest content from a list of URLs
    * 
@@ -1273,6 +1706,50 @@ export class CMSRAGPlugin implements RAGPlugin {
       typeFromUrl: config.typeFromUrl,
       defaultType: config.type || 'page',
       metadata: config.metadata,
+      stripQueryParams: config.stripQueryParams ?? false,
+      render: config.render,
+      renderOptions: config.renderOptions,
+      debug: config.debug,
+      crawlLedger: config.crawlLedger,
+    }, options);
+  }
+
+  /**
+   * Ingest a single page from a URL (no sitemap discovery, no link lookup).
+   * Uses the same crawl pipeline (static/render/auto) as other web ingestion methods.
+   */
+  async ingestSinglePageFromUrl(
+    config: SinglePageConfig,
+    options?: IngestOptions
+  ): Promise<CrawlResult> {
+    if (!config?.url) {
+      return {
+        success: false,
+        indexed: 0,
+        failed: 0,
+        urlsCrawled: 0,
+        urlsSkipped: 0,
+        urlsFailed: 0,
+        crawledAt: new Date(),
+        errors: [{ id: 'config', error: 'url is required' }],
+      };
+    }
+
+    return this.crawlUrls([config.url], {
+      contentSelector: config.contentSelector,
+      titleSelector: config.titleSelector,
+      removeSelectors: config.removeSelectors,
+      concurrency: 1,
+      delayMs: 0,
+      timeout: config.timeout ?? 30000,
+      typeFromUrl: config.typeFromUrl,
+      defaultType: config.type || 'page',
+      metadata: config.metadata,
+      stripQueryParams: config.stripQueryParams ?? true,
+      render: config.render,
+      renderOptions: config.renderOptions,
+      debug: config.debug,
+      crawlLedger: config.crawlLedger,
     }, options);
   }
 
@@ -1287,32 +1764,147 @@ export class CMSRAGPlugin implements RAGPlugin {
     const concurrency = config.concurrency ?? 3;
     const delayMs = config.delayMs ?? 500;
     const timeout = config.timeout ?? 30000;
+    const renderMode = config.render ?? false;
+    const renderOptions: RenderOptions = config.renderOptions || {};
+    const minContentLength = renderOptions.minContentLength ?? 200;
+    const dbg = this.createDebugCollector(config.debug);
+    const ledgerOpts = this.resolveCrawlLedgerOptions(config);
+    const forceRecrawl = !!(options && (options as { forceRecrawl?: boolean }).forceRecrawl);
+    const agentId = (options?.agentId as string | undefined) ?? 'shared';
+    const stripQ = config.stripQueryParams ?? false;
+
+    const urlByNorm = new Map<string, string>();
+    for (const u of urls) {
+      const norm = this.normalizeLedgerUrl(u, stripQ) || u;
+      if (!urlByNorm.has(norm)) urlByNorm.set(norm, u);
+    }
+    const uniqueUrls = Array.from(urlByNorm.values());
+
+    const counters = {
+      staticOk: 0,
+      renderOk: 0,
+      renderFallbacks: 0,
+      nonHtml: 0,
+      tooSmall: 0,
+      blockedSuspected: 0,
+      renderErrors: 0,
+      ledgerSkipped: 0,
+    };
 
     let indexed = 0;
     let urlsCrawled = 0;
     let urlsFailed = 0;
     const errors: Array<{ id: string; error: string }> = [];
     const documents: RAGDocument[] = [];
+    const pageStatuses: CrawlPageStatusEntry[] = [];
+    const maxStatuses = ledgerOpts?.maxPageStatuses ?? 500;
 
     // Process URLs in batches for concurrency control
-    for (let i = 0; i < urls.length; i += concurrency) {
-      const batch = urls.slice(i, i + concurrency);
+    for (let i = 0; i < uniqueUrls.length; i += concurrency) {
+      const batch = uniqueUrls.slice(i, i + concurrency);
 
       const results = await Promise.allSettled(
         batch.map(async (url) => {
+          const urlNormalized = this.normalizeLedgerUrl(url, stripQ) || url;
+
+          if (ledgerOpts && !forceRecrawl) {
+            const entry = await this.findLedgerEntry(urlNormalized, agentId);
+            if (
+              this.shouldSkipLedger(
+                entry,
+                ledgerOpts.ttlMsIndexed,
+                ledgerOpts.ttlMsFailure,
+                ledgerOpts.ttlMsRenderError,
+                false
+              )
+            ) {
+              counters.ledgerSkipped++;
+              this.pushPageStatus(pageStatuses, maxStatuses, {
+                url,
+                urlNormalized,
+                status: 'skipped_ledger',
+                skippedReason: `fresh:${entry?.lastStatus}`,
+                contentLength: entry?.contentLength,
+                title: entry?.title,
+                docId: entry?.docId,
+              });
+              dbg.log('crawl.ledgerSkip', { url, urlNormalized, lastStatus: entry?.lastStatus });
+              return { kind: 'ledger_skip' as const, url };
+            }
+          }
+
           try {
-            const doc = await this.crawlPage(url, config, timeout);
-            return doc;
+            const { doc, diag, bodyTextLengthHint } = await this.crawlPageSmart(url, config, timeout, {
+              renderMode,
+              renderOptions,
+              minContentLength,
+              dbg,
+            });
+            if (diag?.modeUsed === 'static_ok') counters.staticOk++;
+            if (diag?.modeUsed === 'render_ok') counters.renderOk++;
+            if (diag?.modeUsed === 'render_fallback_ok') counters.renderFallbacks++;
+            if (diag?.reason === 'non_html') counters.nonHtml++;
+            if (diag?.reason === 'too_small') counters.tooSmall++;
+            if (diag?.reason === 'blocked_suspected') counters.blockedSuspected++;
+            if (diag?.reason === 'render_error') counters.renderErrors++;
+
+            const crawlSt = this.toLedgerStatus(doc, diag);
+            if (ledgerOpts) {
+              await this.upsertLedgerRecord({
+                url,
+                urlNormalized,
+                agentId,
+                status: crawlSt,
+                doc,
+                diag,
+              });
+            }
+
+            this.pushPageStatus(pageStatuses, maxStatuses, {
+              url,
+              urlNormalized,
+              status: crawlSt,
+              modeUsed: diag?.modeUsed,
+              contentLength: doc?.content?.length,
+              bodyTextLengthHint,
+              title: doc?.metadata?.title,
+              docId: doc?.id,
+              error: diag?.errorMessage,
+            });
+
+            return { kind: 'doc' as const, doc, url };
           } catch (error) {
+            const msg = error instanceof Error ? error.message : String(error);
+            if (ledgerOpts) {
+              await this.upsertLedgerRecord({
+                url,
+                urlNormalized,
+                agentId,
+                status: 'error',
+                errorMessage: msg,
+              });
+            }
+            this.pushPageStatus(pageStatuses, maxStatuses, {
+              url,
+              urlNormalized,
+              status: 'error',
+              error: msg,
+            });
             throw { url, error };
           }
         })
       );
 
       for (const result of results) {
-        if (result.status === 'fulfilled' && result.value) {
-          documents.push(result.value);
-          urlsCrawled++;
+        if (result.status === 'fulfilled') {
+          const v = result.value;
+          if (v && typeof v === 'object' && 'kind' in v && v.kind === 'ledger_skip') {
+            continue;
+          }
+          if (v && typeof v === 'object' && 'kind' in v && v.kind === 'doc' && v.doc) {
+            documents.push(v.doc);
+            urlsCrawled++;
+          }
         } else if (result.status === 'rejected') {
           urlsFailed++;
           errors.push({
@@ -1323,7 +1915,7 @@ export class CMSRAGPlugin implements RAGPlugin {
       }
 
       // Delay between batches
-      if (i + concurrency < urls.length) {
+      if (i + concurrency < uniqueUrls.length) {
         await this.delay(delayMs);
       }
     }
@@ -1346,6 +1938,11 @@ export class CMSRAGPlugin implements RAGPlugin {
       urlsFailed,
       crawledAt: new Date(),
       errors: errors.length > 0 ? errors : undefined,
+      metadata: {
+        counters,
+        pageStatuses,
+        debug: dbg.summary(),
+      },
     };
   }
 
@@ -1375,15 +1972,53 @@ export class CMSRAGPlugin implements RAGPlugin {
     }
 
     const html = await response.text();
-    const $ = cheerio.load(html);
+    return this.extractDocumentFromHtml(url, html, config);
+  }
 
-    // Remove unwanted elements
+  /**
+   * Default chain works for many WordPress / Elementor / block themes where `.first()`
+   * would otherwise hit an empty wrapper.
+   */
+  private static readonly DEFAULT_CONTENT_SELECTOR =
+    'article, main, [role="main"], #content, #primary, #main, .content, .post-content, ' +
+    '.entry-content, .elementor-location-content, .elementor-widget-theme-post-content, ' +
+    '.wp-block-group, .site-content, .ast-single-post, .ast-page';
+
+  private stripNoiseFromDom($: cheerio.CheerioAPI, config: SitemapConfig): void {
     const removeSelectors = config.removeSelectors || [
       'script', 'style', 'nav', 'header', 'footer',
       '.sidebar', '.navigation', '.menu', '.comments',
       '[role="navigation"]', '[role="banner"]',
     ];
     removeSelectors.forEach(selector => $(selector).remove());
+  }
+
+  /** Longest cleaned text among selector matches and full body (after noise strip). */
+  private extractBestContentText($: cheerio.CheerioAPI, config: SitemapConfig): string {
+    const contentSelector =
+      config.contentSelector || WebRAGPlugin.DEFAULT_CONTENT_SELECTOR;
+    const selectors = contentSelector.split(',').map(s => s.trim()).filter(Boolean);
+    let best = '';
+    for (const sel of selectors) {
+      $(sel).each((_, el) => {
+        const t = this.cleanContent($(el).text().trim());
+        if (t.length > best.length) best = t;
+      });
+    }
+    const bodyText = this.cleanContent($('body').text().trim());
+    if (bodyText.length > best.length) best = bodyText;
+    return best;
+  }
+
+  private bodyTextLengthHint(html: string, config: SitemapConfig): number {
+    const $ = cheerio.load(html);
+    this.stripNoiseFromDom($, config);
+    return this.cleanContent($('body').text().trim()).length;
+  }
+
+  private extractDocumentFromHtml(url: string, html: string, config: SitemapConfig): RAGDocument | null {
+    const $ = cheerio.load(html);
+    this.stripNoiseFromDom($, config);
 
     // Extract title
     const titleSelector = config.titleSelector || 'h1, title';
@@ -1392,24 +2027,9 @@ export class CMSRAGPlugin implements RAGPlugin {
       title = $('title').text().trim();
     }
 
-    // Extract main content
-    let content = '';
-    const contentSelector = config.contentSelector || 'article, main, .content, .post-content, #content, [role="main"]';
-    const mainContent = $(contentSelector).first();
-
-    if (mainContent.length) {
-      content = mainContent.text().trim();
-    } else {
-      // Fallback: get body text
-      content = $('body').text().trim();
-    }
-
-    // Clean up content
-    content = this.cleanContent(content);
-
-    if (!content || content.length < 50) {
-      return null; // Skip pages with too little content
-    }
+    const content = this.extractBestContentText($, config);
+    const minChars = config.minExtractedContentLength ?? 50;
+    if (!content || content.length < minChars) return null;
 
     // Determine content type from URL
     let type = config.defaultType || 'page';
@@ -1422,9 +2042,7 @@ export class CMSRAGPlugin implements RAGPlugin {
       }
     }
 
-    // Generate a stable ID from URL
     const id = this.urlToId(url);
-
     return {
       id,
       content,
@@ -1434,6 +2052,351 @@ export class CMSRAGPlugin implements RAGPlugin {
         url,
         ...config.metadata,
       },
+    };
+  }
+
+  private looksLikeDynamicShell(html: string): boolean {
+    const lower = html.toLowerCase();
+
+    const bodyMatch = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+    const body = bodyMatch?.[1] ?? html;
+
+    const textOnly = body
+      .replace(/<script[\s\S]*?<\/script>/gi, '')
+      .replace(/<style[\s\S]*?<\/style>/gi, '')
+      .replace(/<noscript[\s\S]*?<\/noscript>/gi, '')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    const scriptCount = (body.match(/<script\b/gi) ?? []).length;
+
+    const hasEmptyAppMountNode =
+      /<(div|main)[^>]+id=["'](__next|root|app)["'][^>]*>\s*<\/\1>/i.test(body);
+
+    const hasHydrationData =
+      lower.includes('__next_data__') ||
+      lower.includes('__next_f') ||
+      lower.includes('window.__initial_state__') ||
+      lower.includes('window.__apollo_state__') ||
+      lower.includes('data-reactroot');
+
+    const asksForJavascript =
+      lower.includes('please enable javascript') ||
+      lower.includes('enable javascript to run this app') ||
+      lower.includes('you need to enable javascript');
+
+    const hasLoadingHints =
+      /\b(loading|please wait|spinner|initializing|fetching)\b/i.test(lower);
+
+    const textLength = textOnly.length;
+    const htmlLength = lower.length;
+    const contentDensity = textLength / Math.max(htmlLength, 1);
+
+    const isMostlyScripts = scriptCount >= 5 && textLength < 500;
+
+    const isSmallShellLike =
+      htmlLength < 50_000 &&
+      textLength < 500 &&
+      contentDensity < 0.02;
+
+    return (
+      asksForJavascript ||
+      hasEmptyAppMountNode ||
+      hasHydrationData ||
+      isMostlyScripts ||
+      isSmallShellLike ||
+      (hasLoadingHints && textLength < 1_000 && contentDensity < 0.05)
+    );
+  }
+
+  private diagFromRenderedAttempt(
+    doc: RAGDocument | null,
+    bodyTextLengthHint: number,
+    renderFailure: string | undefined,
+    blockedSuspected: boolean | undefined,
+    modeOk: string,
+    modeFailed: string
+  ): {
+    doc: RAGDocument | null;
+    diag?: { modeUsed: string; reason?: string; errorMessage?: string };
+    bodyTextLengthHint?: number;
+  } {
+    if (blockedSuspected) {
+      return {
+        doc: null,
+        diag: { modeUsed: modeFailed, reason: 'blocked_suspected' },
+      };
+    }
+    if (renderFailure) {
+      return {
+        doc: null,
+        diag: { modeUsed: modeFailed, reason: 'render_error', errorMessage: renderFailure },
+      };
+    }
+    return {
+      doc,
+      diag: doc
+        ? { modeUsed: modeOk }
+        : { modeUsed: modeFailed, reason: 'too_small' },
+      bodyTextLengthHint: doc ? undefined : bodyTextLengthHint,
+    };
+  }
+
+  private async crawlPageSmart(
+    url: string,
+    config: SitemapConfig,
+    timeout: number,
+    ctx: {
+      renderMode: boolean | 'auto';
+      renderOptions: RenderOptions;
+      minContentLength: number;
+      dbg: ReturnType<WebRAGPlugin['createDebugCollector']>;
+    }
+  ): Promise<{
+    doc: RAGDocument | null;
+    diag?: { modeUsed: string; reason?: string; errorMessage?: string };
+    bodyTextLengthHint?: number;
+  }> {
+    if (ctx.renderMode === true) {
+      const { doc, bodyTextLengthHint, renderFailure, blockedSuspected } = await this.crawlPageRendered(
+        url, config, timeout, ctx.renderOptions, ctx.dbg
+      );
+      return this.diagFromRenderedAttempt(
+        doc,
+        bodyTextLengthHint,
+        renderFailure,
+        blockedSuspected,
+        'render_ok',
+        'render_failed'
+      );
+    }
+
+    // Try static first
+    try {
+      const response = await fetch(url, {
+        headers: {
+          'User-Agent': 'SnapAgent-CMS-Crawler/1.0',
+          'Accept': 'text/html,application/xhtml+xml',
+        },
+        signal: AbortSignal.timeout(timeout),
+      });
+
+      if (!response.ok) {
+        // Heuristic: anti-bot pages often return 403/429/503
+        const status = response.status;
+        if (status === 403 || status === 429 || status === 503) {
+          ctx.dbg.log('crawl.blocked', { url, status });
+          return { doc: null, diag: { modeUsed: 'static_failed', reason: 'blocked_suspected' } };
+        }
+        throw new Error(`HTTP ${status}`);
+      }
+
+      const contentType = response.headers.get('content-type') || '';
+      if (!contentType.includes('text/html')) {
+        return { doc: null, diag: { modeUsed: 'static_failed', reason: 'non_html' } };
+      }
+
+      const html = await response.text();
+      const doc = this.extractDocumentFromHtml(url, html, config);
+      const staticHint = !doc ? this.bodyTextLengthHint(html, config) : undefined;
+
+      if (doc && doc.content.length >= ctx.minContentLength) {
+        return { doc, diag: { modeUsed: 'static_ok' } };
+      }
+
+      // doc is null or too small
+      if (ctx.renderMode === 'auto') {
+        const shouldRender = this.looksLikeDynamicShell(html) || !doc || (doc.content.length < ctx.minContentLength);
+        if (shouldRender) {
+          ctx.dbg.log('crawl.renderFallback', {
+            url,
+            reason: !doc ? 'no_doc' : 'too_small',
+            staticLength: doc?.content?.length ?? 0,
+          });
+          const {
+            doc: rendered,
+            bodyTextLengthHint: rHint,
+            renderFailure,
+            blockedSuspected,
+          } = await this.crawlPageRendered(
+            url, config, timeout, ctx.renderOptions, ctx.dbg
+          );
+          const mergedHint = rHint ?? staticHint;
+          const fb = this.diagFromRenderedAttempt(
+            rendered,
+            mergedHint,
+            renderFailure,
+            blockedSuspected,
+            'render_fallback_ok',
+            'render_fallback_failed'
+          );
+          if (!rendered && (renderFailure || blockedSuspected)) {
+            fb.bodyTextLengthHint = staticHint ?? rHint;
+          }
+          return fb;
+        }
+      }
+
+      return {
+        doc: null,
+        diag: { modeUsed: 'static_failed', reason: 'too_small' },
+        bodyTextLengthHint: staticHint,
+      };
+    } catch (e) {
+      // Network/timeouts/etc.
+      throw e;
+    }
+  }
+
+  private async crawlPageRendered(
+    url: string,
+    config: SitemapConfig,
+    timeout: number,
+    renderOptions: RenderOptions,
+    dbg: ReturnType<WebRAGPlugin['createDebugCollector']>
+  ): Promise<{
+    doc: RAGDocument | null;
+    bodyTextLengthHint: number;
+    renderFailure?: string;
+    blockedSuspected?: boolean;
+  }> {
+    let playwright: any;
+    try {
+      // Avoid static TS module resolution (playwright is optional at runtime)
+      // eslint-disable-next-line no-new-func
+      playwright = await (Function('return import("playwright")')() as Promise<any>);
+    } catch (e) {
+      dbg.log('render.missingDependency', { url, error: 'playwright_not_installed' });
+      throw new Error('playwright is not installed. Add it to dependencies to use crawlPageRendered().');
+    }
+
+    const waitUntil = renderOptions.waitUntil || 'domcontentloaded';
+    const waitForSelector = renderOptions.waitForSelector;
+    const scrollCfg = renderOptions.scroll || {};
+    const doScroll = scrollCfg.enabled ?? false;
+    const maxScrolls = scrollCfg.maxScrolls ?? 10;
+    const scrollDelayMs = scrollCfg.scrollDelayMs ?? 750;
+    const stableIterations = scrollCfg.stableIterations ?? 2;
+    const postRenderDelayMs = renderOptions.postRenderDelayMs ?? 0;
+
+    const browser = await playwright.chromium.launch({ headless: true });
+    try {
+      const page = await browser.newPage();
+      await page.goto(url, { waitUntil, timeout });
+      if (waitForSelector) {
+        await page.waitForSelector(waitForSelector, { timeout });
+      }
+      if (postRenderDelayMs > 0) {
+        await page.waitForTimeout(postRenderDelayMs);
+      }
+
+      if (doScroll) {
+        let stable = 0;
+        let lastLen = 0;
+        for (let i = 0; i < maxScrolls; i++) {
+          const len = await page.evaluate("(document.body?.innerText || '').length");
+          if (len <= lastLen + 20) stable++;
+          else stable = 0;
+          lastLen = len;
+          if (stable >= stableIterations) break;
+
+          await page.evaluate("window.scrollTo(0, document.body.scrollHeight)");
+          await page.waitForTimeout(scrollDelayMs);
+        }
+      }
+
+      const html = await page.content();
+      const bodyTextLengthHint = this.bodyTextLengthHint(html, config);
+      const doc = this.extractDocumentFromHtml(url, html, config);
+
+      if (config.debug?.saveDir && config.debug?.enabled) {
+        try {
+          const saveDir = config.debug.saveDir;
+          const safeId = this.urlToId(url) || 'page';
+          const outDir = path.join(saveDir, safeId);
+          fs.mkdirSync(outDir, { recursive: true });
+          fs.writeFileSync(path.join(outDir, 'rendered.html'), html, 'utf8');
+          fs.writeFileSync(path.join(outDir, 'extracted.txt'), doc?.content || '', 'utf8');
+          fs.writeFileSync(path.join(outDir, 'meta.json'), JSON.stringify(doc?.metadata || {}, null, 2), 'utf8');
+        } catch (e) {
+          dbg.log('debug.saveFailed', { url, error: e instanceof Error ? e.message : 'save_failed' });
+        }
+      }
+
+      return { doc, bodyTextLengthHint };
+    } catch (e: any) {
+      const msg = String(e?.message || e || 'render_failed');
+      const lower = msg.toLowerCase();
+      if (lower.includes('captcha') || lower.includes('access denied')) {
+        dbg.log('render.blocked', { url, error: msg });
+        return { doc: null, bodyTextLengthHint: 0, blockedSuspected: true };
+      }
+      dbg.log('render.error', { url, error: msg });
+      return { doc: null, bodyTextLengthHint: 0, renderFailure: msg };
+    } finally {
+      await browser.close();
+    }
+  }
+
+  private async discoverSitemaps(
+    baseUrl: string,
+    timeout: number,
+    dbg: ReturnType<WebRAGPlugin['createDebugCollector']>
+  ): Promise<string[]> {
+    const base = new URL(baseUrl);
+    const robotsUrl = new URL('/robots.txt', base).toString();
+
+    const found = new Set<string>();
+    try {
+      const res = await fetch(robotsUrl, {
+        headers: { 'User-Agent': 'SnapAgent-CMS-Crawler/1.0' },
+        signal: AbortSignal.timeout(timeout),
+      });
+      if (res.ok) {
+        const txt = await res.text();
+        const rx = /^sitemap:\s*(\S+)/gim;
+        let m: RegExpExecArray | null;
+        while ((m = rx.exec(txt)) !== null) {
+          const sm = m[1].trim();
+          if (sm.startsWith('http')) found.add(sm);
+        }
+        dbg.log('discovery.robots', { robotsUrl, ok: true, sitemapCount: found.size });
+      } else {
+        dbg.log('discovery.robots', { robotsUrl, ok: false, status: res.status });
+      }
+    } catch (e) {
+      dbg.log('discovery.robots', { robotsUrl, ok: false, error: e instanceof Error ? e.message : 'failed' });
+    }
+
+    if (found.size === 0) {
+      const candidates = [
+        '/sitemap.xml',
+        '/sitemap_index.xml',
+        '/sitemap-index.xml',
+        '/wp-sitemap.xml',
+      ].map(p => new URL(p, base).toString());
+      candidates.forEach(c => found.add(c));
+      dbg.log('discovery.sitemapCandidates', { count: candidates.length });
+    }
+
+    return Array.from(found);
+  }
+
+  private createDebugCollector(debug?: DebugOptions) {
+    const enabled = !!debug?.enabled;
+    const level = debug?.level || 'summary';
+    const maxPerUrlLogs = debug?.maxPerUrlLogs ?? 200;
+    const entries: Array<{ ts: string; event: string; data?: any }> = [];
+
+    return {
+      log: (event: string, data?: any) => {
+        if (!enabled) return;
+        if (level === 'summary' && !event.startsWith('discovery.') && !event.startsWith('crawl.')) return;
+        if (entries.length >= maxPerUrlLogs) return;
+        entries.push({ ts: new Date().toISOString(), event, data });
+      },
+      summary: () => (enabled ? { enabled, level, entries } : undefined),
     };
   }
 
