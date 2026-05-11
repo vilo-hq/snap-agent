@@ -70,14 +70,14 @@ export class MongoDBStorage implements StorageAdapter {
     if (typeof config === 'string') {
       this.config = {
         uri: config,
-        dbName: 'agentStudio',
+        dbName: 'snap_agent',
         agentsCollection: 'v2_agents',
         threadsCollection: 'v2_threads',
       };
     } else {
       this.config = {
         uri: config.uri,
-        dbName: config.dbName || 'agentStudio',
+        dbName: config.dbName || 'snap_agent',
         agentsCollection: config.agentsCollection || 'v2_agents',
         threadsCollection: config.threadsCollection || 'v2_threads',
       };

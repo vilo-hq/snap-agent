@@ -158,7 +158,7 @@ const agent = await client.createAgent({
 
 ```bash
 # .env
-MONGODB_URI=mongodb://localhost:27017/agentStudio
+MONGODB_URI=mongodb://localhost:27017/snap_agent
 OPENAI_API_KEY=sk-...
 VOYAGE_API_KEY=pa-...
 ```

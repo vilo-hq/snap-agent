@@ -199,7 +199,7 @@ export class EcommerceRAGPlugin implements RAGPlugin {
   constructor(config: EcommerceRAGConfig) {
     // Set defaults
     this.config = {
-      dbName: 'agentStudio',
+      dbName: 'snap_agent',
       collection: 'products',
       embeddingModel: 'voyage-multilingual-2',
       attributeList: [
