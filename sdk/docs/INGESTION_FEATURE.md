@@ -19,7 +19,8 @@ Optional ingestion methods in the `RAGPlugin` interface:
 **Types:**
 - `RAGDocument` - Standard document format for ingestion
 - `IngestResult` - Result of ingestion operations
-- `IngestOptions` - Configuration for ingestion
+- `IngestOptions` - Configuration for ingestion (optional `onIngestPlan` / `onIngestProgress` for DocsRAG-style progress)
+- `IngestPlanInfo`, `IngestProgressEvent`, `IngestDocumentProgress` - Types for ingest progress callbacks (see DocsRAGPlugin)
 - `BulkOperation` - Operation descriptor for bulk actions
 - `BulkResult` - Result of bulk operations
 
