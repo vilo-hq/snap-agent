@@ -63,29 +63,30 @@ await plugin.ingest([{
 
 ### 2️⃣ **PDF** (.pdf)
 
-**Library:** [`pdf-parse`](https://www.npmjs.com/package/pdf-parse)
+**Library:** [`unpdf`](https://www.npmjs.com/package/unpdf) (PDF.js, ESM-friendly; recommended over `pdf-parse` for Node/tsx and serverless)
 
 ```bash
-pnpm add pdf-parse
-pnpm add -D @types/pdf-parse
+pnpm add unpdf
 ```
 
 ```typescript
-import pdf from 'pdf-parse';
 import { readFileSync } from 'fs';
+import { extractText, getDocumentProxy, getMeta } from 'unpdf';
 
-const dataBuffer = readFileSync('document.pdf');
-const data = await pdf(dataBuffer);
+const bytes = new Uint8Array(readFileSync('document.pdf'));
+const pdf = await getDocumentProxy(bytes);
+const { totalPages, text } = await extractText(pdf, { mergePages: true });
+const { info } = await getMeta(pdf).catch(() => ({ info: {} }));
 
 await plugin.ingest([{
   id: 'document',
-  content: data.text,
+  content: text,
   metadata: {
     type: 'pdf',
-    pages: data.numpages,
-    info: data.info
+    pages: totalPages,
+    title: typeof info.Title === 'string' ? info.Title : undefined,
   }
-}]);
+}], { agentId: 'my-agent' });
 ```
 
 **See full example:** [sdk/examples/docs-rag/ingest-pdf.ts](../../../sdk/examples/docs-rag/ingest-pdf.ts)

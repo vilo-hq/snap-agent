@@ -94,13 +94,21 @@ When you reload an agent from MongoDB, the SDK:
 
 **Install:**
 ```bash
-pnpm add pdf-parse -D @types/pdf-parse
+pnpm add -D unpdf
 ```
 
 **Run:**
 ```bash
 cd sdk/examples/docs-rag
 npx tsx ingest-pdf.ts path/to/document.pdf
+```
+
+### Two PDFs (global + per-file progress)
+
+Shows `onIngestProgress` → `byDocument` for each file while ingesting both in one `ingest()` call.
+
+```bash
+npx tsx ingest-two-pdfs.ts "C:\path\first.pdf" "C:\path\second.pdf"
 ```
 
 **Features:**

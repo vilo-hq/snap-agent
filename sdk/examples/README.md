@@ -436,7 +436,7 @@ cd sdk/examples/docs-rag
 npx tsx test-plugin.ts
 
 # Ingest PDF document
-pnpm add pdf-parse -D @types/pdf-parse
+pnpm add -D unpdf
 npx tsx ingest-pdf.ts path/to/document.pdf
 
 # Ingest Word document
