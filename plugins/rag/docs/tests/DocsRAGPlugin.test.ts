@@ -300,6 +300,20 @@ describe('DocsRAGPlugin', () => {
       expect(mockUpdateOne.mock.calls.length).toBeGreaterThan(0);
     });
 
+    it('should split oversized paragraph chunks (PDF-style text without blank lines)', async () => {
+      plugin = new DocsRAGPlugin({
+        ...defaultConfig,
+        chunkingStrategy: 'paragraph',
+        maxChunkSize: 100,
+        chunkOverlap: 20,
+      });
+      const big = 'word '.repeat(80);
+      const result = await plugin.ingest([{ id: 'doc1', content: big }], { agentId: 'agent-1' });
+      expect(result.success).toBe(true);
+      expect(result.metadata?.totalChunks).toBeGreaterThan(1);
+      expect(mockUpdateOne.mock.calls.length).toBeGreaterThan(1);
+    });
+
     it('should include metadata in result', async () => {
       const result = await plugin.ingest(
         [{ id: 'doc1', content: '# Title\n\nContent here' }],
@@ -853,6 +867,58 @@ describe('DocsRAGPlugin', () => {
 
       expect(result.success).toBe(false);
       expect(result.errors?.[0].error).toContain('Voyage API error');
+    });
+  });
+
+  describe('ingest progress callbacks', () => {
+    it('calls onIngestPlan once and onIngestProgress for embedding+stored per chunk (multi-doc)', async () => {
+      plugin = new DocsRAGPlugin({
+        ...defaultConfig,
+        chunkingStrategy: 'paragraph',
+        maxChunkSize: 500,
+      });
+      const onIngestPlan = vi.fn();
+      const onIngestProgress = vi.fn();
+
+      await plugin.ingest(
+        [
+          { id: 'doc-a', content: 'First block.\n\nSecond block.' },
+          { id: 'doc-b', content: 'Single block B.' },
+        ],
+        { agentId: 'agent-1', onIngestPlan, onIngestProgress },
+      );
+
+      expect(onIngestPlan).toHaveBeenCalledTimes(1);
+      const plan = onIngestPlan.mock.calls[0][0] as { totalChunks: number; documents: Array<{ documentId: string; chunkCount: number }> };
+      expect(plan.documents).toHaveLength(2);
+      expect(plan.totalChunks).toBe(
+        plan.documents.find((d) => d.documentId === 'doc-a')!.chunkCount +
+          plan.documents.find((d) => d.documentId === 'doc-b')!.chunkCount,
+      );
+
+      const all = onIngestProgress.mock.calls.map((c) => c[0] as { phase: string; processedGlobal: number });
+      const embedding = all.filter((e) => e.phase === 'embedding');
+      const stored = all.filter((e) => e.phase === 'stored');
+      expect(embedding.length).toBe(plan.totalChunks);
+      expect(stored.length).toBe(plan.totalChunks);
+      expect(stored[stored.length - 1].processedGlobal).toBe(plan.totalChunks);
+
+      const last = stored[stored.length - 1] as {
+        byDocument: Record<string, { chunksDone: number; chunksTotal: number }>;
+      };
+      expect(last.byDocument['doc-a'].chunksDone).toBe(
+        plan.documents.find((d) => d.documentId === 'doc-a')!.chunkCount,
+      );
+      expect(last.byDocument['doc-b'].chunksDone).toBe(
+        plan.documents.find((d) => d.documentId === 'doc-b')!.chunkCount,
+      );
+    });
+
+    it('does not invoke onIngestPlan when not provided', async () => {
+      plugin = new DocsRAGPlugin(defaultConfig);
+      const onIngestPlan = vi.fn();
+      await plugin.ingest([{ id: 'd1', content: 'hello' }], { agentId: 'agent-1' });
+      expect(onIngestPlan).not.toHaveBeenCalled();
     });
   });
 
