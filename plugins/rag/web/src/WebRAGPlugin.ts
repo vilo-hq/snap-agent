@@ -78,6 +78,8 @@ export class WebRAGPlugin implements RAGPlugin {
       limit: 10,
       minScore: 0.7,
       filterableFields: ['type'],
+      maxChunkSize: 1500,
+      chunkOverlap: 200,
       ...config,
     };
     this.priority = config.priority ?? 100;
@@ -499,6 +501,61 @@ export class WebRAGPlugin implements RAGPlugin {
   }
 
   // ============================================================================
+  // Chunking
+  // ============================================================================
+
+  /**
+   * Split content into chunks by paragraph boundaries, respecting maxChunkSize.
+   * Returns the original content as a single chunk when chunking is disabled
+   * (maxChunkSize === 0) or the content fits within maxChunkSize.
+   */
+  private chunkContent(content: string): string[] {
+    const maxSize = this.config.maxChunkSize ?? 1500;
+    if (maxSize === 0 || content.length <= maxSize) {
+      return [content];
+    }
+
+    const overlap = this.config.chunkOverlap ?? 200;
+    const paragraphs = content.split(/\n\n+/);
+    const chunks: string[] = [];
+    let current = '';
+
+    for (const para of paragraphs) {
+      const trimmed = para.trim();
+      if (!trimmed) continue;
+
+      // If a single paragraph exceeds maxSize, split it with overlap
+      if (trimmed.length > maxSize) {
+        if (current.trim()) {
+          chunks.push(current.trim());
+          current = '';
+        }
+        for (let i = 0; i < trimmed.length; i += maxSize - overlap) {
+          const slice = trimmed.slice(i, i + maxSize);
+          if (slice.trim()) chunks.push(slice.trim());
+        }
+        continue;
+      }
+
+      const candidate = current ? current + '\n\n' + trimmed : trimmed;
+      if (candidate.length > maxSize) {
+        if (current.trim()) {
+          chunks.push(current.trim());
+        }
+        current = trimmed;
+      } else {
+        current = candidate;
+      }
+    }
+
+    if (current.trim()) {
+      chunks.push(current.trim());
+    }
+
+    return chunks.length > 0 ? chunks : [content];
+  }
+
+  // ============================================================================
   // Document Ingestion
   // ============================================================================
 
@@ -513,55 +570,59 @@ export class WebRAGPlugin implements RAGPlugin {
 
     let indexed = 0;
     const errors: Array<{ id: string; error: string }> = [];
-    const batchSize = options?.batchSize ?? 10;
+    const agentId = options?.agentId || 'shared';
 
-    for (let i = 0; i < documents.length; i += batchSize) {
-      const batch = documents.slice(i, i + batchSize);
+    for (const doc of documents) {
+      try {
+        const chunks = this.chunkContent(doc.content);
+        const isChunked = chunks.length > 1;
 
-      // Generate embeddings
-      const embeddings = await this.generateEmbeddingsBatch(
-        batch.map(doc => doc.content)
-      );
-
-      // Prepare documents for storage (without createdAt - handled by $setOnInsert)
-      const docsToStore = batch.map((doc, idx) => ({
-        id: doc.id,
-        content: doc.content,
-        metadata: {
-          type: doc.metadata?.type || 'content',
-          ...doc.metadata,
-        },
-        tenantId: this.config.tenantId,
-        // Use 'shared' marker for tenant-wide content, specific agentId for agent-only
-        agentId: options?.agentId || 'shared',
-        embedding: embeddings[idx],
-      }));
-
-      // Upsert documents
-      for (const doc of docsToStore) {
-        try {
-          const filter: any = {
+        // Remove any previous chunks for this document before re-ingesting
+        if (isChunked) {
+          await collection.deleteMany({
             tenantId: this.config.tenantId,
-            id: doc.id,
-            // Match by agentId ('shared' for tenant-wide, specific for agent-only)
-            agentId: options?.agentId || 'shared',
+            documentId: doc.id,
+            agentId,
+          });
+        }
+
+        for (let i = 0; i < chunks.length; i++) {
+          const chunkId = isChunked ? `chunk-${doc.id}-${i}` : doc.id;
+          const embedding = await this.generateEmbedding(chunks[i]);
+
+          const storedDoc: any = {
+            id: chunkId,
+            content: chunks[i],
+            metadata: {
+              type: doc.metadata?.type || 'content',
+              ...doc.metadata,
+            },
+            tenantId: this.config.tenantId,
+            agentId,
+            embedding,
           };
 
+          if (isChunked) {
+            storedDoc.documentId = doc.id;
+            storedDoc.chunkIndex = i;
+          }
+
           await collection.updateOne(
-            filter,
+            { tenantId: this.config.tenantId, id: chunkId, agentId },
             {
-              $set: { ...doc, updatedAt: new Date() },
+              $set: { ...storedDoc, updatedAt: new Date() },
               $setOnInsert: { createdAt: new Date() },
             },
             { upsert: true }
           );
-          indexed++;
-        } catch (error) {
-          errors.push({
-            id: doc.id,
-            error: error instanceof Error ? error.message : 'Unknown error',
-          });
         }
+
+        indexed++;
+      } catch (error) {
+        errors.push({
+          id: doc.id,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
       }
     }
 
@@ -578,41 +639,51 @@ export class WebRAGPlugin implements RAGPlugin {
   }
 
   /**
-   * Update a single document
+   * Update a single document.
+   * When content changes the document is re-chunked (old chunks removed, new ones inserted).
    */
   async update(
     id: string,
     document: Partial<RAGDocument>,
     options?: IngestOptions
   ): Promise<void> {
-    const collection = await this.getCollection();
+    const agentId = options?.agentId || 'shared';
 
-    const update: any = { updatedAt: new Date() };
-
+    // If content changed, re-ingest so chunking is applied correctly
     if (document.content) {
-      const embedding = await this.generateEmbedding(document.content);
-      update.content = document.content;
-      update.embedding = embedding;
+      const fullDoc: RAGDocument = {
+        id,
+        content: document.content,
+        metadata: document.metadata ?? { type: 'content' },
+      };
+      // Delete old chunks/row then re-ingest
+      await this.delete(id, options);
+      await this.ingest([fullDoc], options);
+      return;
     }
 
+    // Metadata-only update: patch all chunks (or the single row)
+    const collection = await this.getCollection();
+    const metaUpdate: any = { updatedAt: new Date() };
     if (document.metadata) {
       for (const [key, value] of Object.entries(document.metadata)) {
-        update[`metadata.${key}`] = value;
+        metaUpdate[`metadata.${key}`] = value;
       }
     }
 
-    const filter: any = {
-      tenantId: this.config.tenantId,
-      id,
-      // Match by agentId ('shared' for tenant-wide, specific for agent-only)
-      agentId: options?.agentId || 'shared',
-    };
-
-    await collection.updateOne(filter, { $set: update });
+    // Update the single-row case (id matches) and chunked case (documentId matches)
+    await collection.updateMany(
+      {
+        tenantId: this.config.tenantId,
+        agentId,
+        $or: [{ id }, { documentId: id }],
+      },
+      { $set: metaUpdate }
+    );
   }
 
   /**
-   * Delete document(s) by ID
+   * Delete document(s) by ID — also removes any chunks belonging to the document.
    */
   async delete(
     ids: string | string[],
@@ -624,9 +695,12 @@ export class WebRAGPlugin implements RAGPlugin {
 
     const filter: any = {
       tenantId: this.config.tenantId,
-      id: { $in: idArray },
-      // Match by agentId ('shared' for tenant-wide, specific for agent-only)
       agentId: options?.agentId || 'shared',
+      // Match the document itself (id) OR any chunks that belong to it (documentId)
+      $or: [
+        { id: { $in: idArray } },
+        { documentId: { $in: idArray } },
+      ],
     };
 
     const result = await collection.deleteMany(filter);

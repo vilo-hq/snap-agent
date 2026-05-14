@@ -30,6 +30,8 @@ export interface WebDocument {
 export interface StoredWebDocument extends WebDocument {
   tenantId: string;
   agentId?: string;
+  documentId?: string;   // Parent document ID (set when content is chunked)
+  chunkIndex?: number;   // Chunk position within the parent document
   embedding: number[];
   createdAt: Date;
   updatedAt?: Date;
@@ -70,6 +72,10 @@ export interface WebRAGConfig {
     decayDays: number;      // Content older than this gets reduced boost
     maxBoost?: number;      // Max boost for fresh content (default: 1.2)
   };
+
+  // Chunking (large documents are split before embedding)
+  maxChunkSize?: number;   // Default: 1500 characters (0 = no chunking)
+  chunkOverlap?: number;   // Default: 200 characters
 
   // Caching
   cache?: {
