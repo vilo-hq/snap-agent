@@ -41,7 +41,7 @@
     "access": "public"
   },
   "peerDependencies": {
-    "@snap-agent/core": "^0.1.0 || ^0.2.0",
+    "@snap-agent/core": "^0.2.3",
     "mongodb": "^6.0.0 || ^7.0.0"
   },
   "dependencies": {
