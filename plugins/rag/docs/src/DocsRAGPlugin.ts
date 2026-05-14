@@ -4,6 +4,9 @@ import type {
   RAGDocument,
   IngestResult,
   IngestOptions,
+  IngestPlanInfo,
+  IngestDocumentProgress,
+  IngestProgressPhase,
 } from '@snap-agent/core';
 import { MongoClient, Db, Collection } from 'mongodb';
 import OpenAI from 'openai';
@@ -99,6 +102,35 @@ export interface DocsRAGConfig {
 }
 
 export type ChunkingStrategy = 'paragraph' | 'sentence' | 'fixed' | 'markdown';
+
+type PlannedDocChunk = {
+  content: string;
+  metadata: { type: 'text' | 'code' | 'heading'; section?: string; language?: string };
+};
+
+function buildIngestByDocumentSnapshot(
+  plan: Array<{ documentId: string; chunkCount: number }>,
+  activeDocId: string,
+  activeDocChunksDone: number,
+): Record<string, IngestDocumentProgress> {
+  const activeIdx = plan.findIndex((d) => d.documentId === activeDocId);
+  const result: Record<string, IngestDocumentProgress> = {};
+  for (let idx = 0; idx < plan.length; idx++) {
+    const p = plan[idx];
+    let chunksDone: number;
+    if (activeIdx < 0) {
+      chunksDone = 0;
+    } else if (idx < activeIdx) {
+      chunksDone = p.chunkCount;
+    } else if (idx === activeIdx) {
+      chunksDone = activeDocChunksDone;
+    } else {
+      chunksDone = 0;
+    }
+    result[p.documentId] = { chunksDone, chunksTotal: p.chunkCount };
+  }
+  return result;
+}
 
 export interface DocumentChunk {
   id: string;
@@ -415,19 +447,56 @@ export class DocsRAGPlugin implements RAGPlugin {
     }
 
     const collection = await this.getCollection();
-    let indexed = 0;
-    let totalChunks = 0;
     const errors: Array<{ id: string; error: string }> = [];
 
+    const planned: Array<{ doc: RAGDocument; chunks: PlannedDocChunk[] }> = [];
     for (const doc of documents) {
       try {
-        // Chunk the document
         const chunks = this.chunkDocument(doc);
-        totalChunks += chunks.length;
+        planned.push({ doc, chunks });
+      } catch (error) {
+        errors.push({
+          id: doc.id,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+      }
+    }
 
-        // Generate embeddings and store each chunk
+    const planDocumentsMeta = planned.map(({ doc, chunks }) => ({
+      documentId: doc.id,
+      chunkCount: chunks.length,
+    }));
+    const totalChunks = planDocumentsMeta.reduce((sum, row) => sum + row.chunkCount, 0);
+
+    if (options.onIngestPlan) {
+      const plan: IngestPlanInfo = {
+        totalChunks,
+        documents: planDocumentsMeta,
+      };
+      await options.onIngestPlan(plan);
+    }
+
+    let indexed = 0;
+    let processedGlobal = 0;
+
+    for (const { doc, chunks } of planned) {
+      try {
         for (let i = 0; i < chunks.length; i++) {
           const chunk = chunks[i];
+
+          if (options.onIngestProgress) {
+            const byDocEmb = buildIngestByDocumentSnapshot(planDocumentsMeta, doc.id, i);
+            await options.onIngestProgress({
+              phase: 'embedding' as IngestProgressPhase,
+              documentId: doc.id,
+              chunkIndex: i,
+              chunksInDocument: chunks.length,
+              processedGlobal,
+              totalGlobal: totalChunks,
+              byDocument: byDocEmb,
+            });
+          }
+
           const embedding = await this.generateEmbedding(chunk.content);
 
           const storedChunk: Omit<StoredDocChunk, 'createdAt' | 'updatedAt'> = {
@@ -444,7 +513,6 @@ export class DocsRAGPlugin implements RAGPlugin {
             agentId: options.agentId,
           };
 
-          // Upsert to MongoDB
           await collection.updateOne(
             {
               tenantId: this.config.tenantId,
@@ -457,6 +525,21 @@ export class DocsRAGPlugin implements RAGPlugin {
             },
             { upsert: true }
           );
+
+          processedGlobal += 1;
+
+          if (options.onIngestProgress) {
+            const byDocStored = buildIngestByDocumentSnapshot(planDocumentsMeta, doc.id, i + 1);
+            await options.onIngestProgress({
+              phase: 'stored' as IngestProgressPhase,
+              documentId: doc.id,
+              chunkIndex: i,
+              chunksInDocument: chunks.length,
+              processedGlobal,
+              totalGlobal: totalChunks,
+              byDocument: byDocStored,
+            });
+          }
         }
 
         indexed++;
@@ -604,6 +687,23 @@ export class DocsRAGPlugin implements RAGPlugin {
   }
 
   /**
+   * Split plain text that exceeds max chunk size (used when PDFs have no `\n\n`
+   * breaks or a single "paragraph" is huge).
+   */
+  private splitTextByMaxChunkSize(text: string): string[] {
+    const size = this.config.maxChunkSize;
+    const overlap = this.config.chunkOverlap;
+    const parts: string[] = [];
+    for (let i = 0; i < text.length; i += size - overlap) {
+      const slice = text.slice(i, i + size);
+      if (slice.trim()) {
+        parts.push(slice.trim());
+      }
+    }
+    return parts.length > 0 ? parts : (text.trim() ? [text.trim()] : []);
+  }
+
+  /**
    * Paragraph-based chunking
    */
   private chunkByParagraph(content: string): Array<{
@@ -619,16 +719,28 @@ export class DocsRAGPlugin implements RAGPlugin {
     let currentChunk = '';
 
     for (const para of paragraphs) {
-      if ((currentChunk + para).length > this.config.maxChunkSize) {
-        if (currentChunk.trim()) {
-          chunks.push({
-            content: currentChunk.trim(),
-            metadata: { type: 'text' },
-          });
+      const trimmed = para.trim();
+      if (!trimmed) {
+        continue;
+      }
+
+      const pieces =
+        trimmed.length <= this.config.maxChunkSize
+          ? [trimmed]
+          : this.splitTextByMaxChunkSize(trimmed);
+
+      for (const piece of pieces) {
+        if ((currentChunk + (currentChunk ? '\n\n' : '') + piece).length > this.config.maxChunkSize) {
+          if (currentChunk.trim()) {
+            chunks.push({
+              content: currentChunk.trim(),
+              metadata: { type: 'text' },
+            });
+          }
+          currentChunk = piece;
+        } else {
+          currentChunk += (currentChunk ? '\n\n' : '') + piece;
         }
-        currentChunk = para;
-      } else {
-        currentChunk += (currentChunk ? '\n\n' : '') + para;
       }
     }
 
@@ -658,16 +770,28 @@ export class DocsRAGPlugin implements RAGPlugin {
     let currentChunk = '';
 
     for (const sentence of sentences) {
-      if ((currentChunk + sentence).length > this.config.maxChunkSize) {
-        if (currentChunk.trim()) {
-          chunks.push({
-            content: currentChunk.trim(),
-            metadata: { type: 'text' },
-          });
+      const trimmed = sentence.trim();
+      if (!trimmed) {
+        continue;
+      }
+
+      const pieces =
+        trimmed.length <= this.config.maxChunkSize
+          ? [trimmed]
+          : this.splitTextByMaxChunkSize(trimmed);
+
+      for (const piece of pieces) {
+        if ((currentChunk + (currentChunk ? ' ' : '') + piece).length > this.config.maxChunkSize) {
+          if (currentChunk.trim()) {
+            chunks.push({
+              content: currentChunk.trim(),
+              metadata: { type: 'text' },
+            });
+          }
+          currentChunk = piece;
+        } else {
+          currentChunk += (currentChunk ? ' ' : '') + piece;
         }
-        currentChunk = sentence;
-      } else {
-        currentChunk += (currentChunk ? ' ' : '') + sentence;
       }
     }
 

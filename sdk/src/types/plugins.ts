@@ -68,6 +68,51 @@ export interface IngestResult {
 }
 
 /**
+ * Per-document row in the ingest plan (chunk counts before any embedding).
+ */
+export interface IngestPlanDocument {
+  documentId: string;
+  chunkCount: number;
+}
+
+/**
+ * Emitted once after all documents are chunked in memory, before embeddings run.
+ * Use this to size progress bars (global and per-document).
+ */
+export interface IngestPlanInfo {
+  totalChunks: number;
+  documents: IngestPlanDocument[];
+}
+
+/** Progress for a single document in a snapshot (chunks done vs planned total). */
+export interface IngestDocumentProgress {
+  chunksDone: number;
+  chunksTotal: number;
+}
+
+/**
+ * `embedding` — about to call the embedding provider for this chunk.
+ * `stored` — chunk was written to storage; `processedGlobal` counts this chunk.
+ */
+export type IngestProgressPhase = 'embedding' | 'stored';
+
+/**
+ * Fine-grained ingest progress (implemented by DocsRAGPlugin; other RAG plugins may ignore).
+ */
+export interface IngestProgressEvent {
+  phase: IngestProgressPhase;
+  documentId: string;
+  /** 0-based index of the chunk within the document */
+  chunkIndex: number;
+  chunksInDocument: number;
+  /** Chunks fully persisted so far in this ingest call (only advances on `stored`) */
+  processedGlobal: number;
+  totalGlobal: number;
+  /** Snapshot: every documentId from the plan with done/total counts */
+  byDocument: Record<string, IngestDocumentProgress>;
+}
+
+/**
  * Options for ingestion operations
  */
 export interface IngestOptions {
@@ -75,6 +120,16 @@ export interface IngestOptions {
   batchSize?: number;
   skipExisting?: boolean;
   overwrite?: boolean;
+  /**
+   * Called once after chunking all documents, before any embedding.
+   * DocsRAGPlugin (and optionally others) may invoke this.
+   */
+  onIngestPlan?: (plan: IngestPlanInfo) => void | Promise<void>;
+  /**
+   * Called around each chunk: `embedding` before the provider call, `stored` after persistence.
+   * On `stored`, `processedGlobal` increases by 1.
+   */
+  onIngestProgress?: (event: IngestProgressEvent) => void | Promise<void>;
   [key: string]: any;
 }
 
