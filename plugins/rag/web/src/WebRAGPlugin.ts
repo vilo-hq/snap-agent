@@ -2124,6 +2124,12 @@ export class WebRAGPlugin implements RAGPlugin {
       }
     }
 
+    // Extract page description (og:description → meta description)
+    const description =
+      $('meta[property="og:description"]').attr('content') ||
+      $('meta[name="description"]').attr('content') ||
+      undefined;
+
     // Determine content type from URL
     let type = config.defaultType || 'page';
     if (config.typeFromUrl) {
@@ -2144,6 +2150,7 @@ export class WebRAGPlugin implements RAGPlugin {
         title,
         url,
         ...(imageUrl ? { imageUrl } : {}),
+        ...(description ? { description } : {}),
         ...config.metadata,
       },
     };
