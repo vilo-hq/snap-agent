@@ -2105,6 +2105,25 @@ export class WebRAGPlugin implements RAGPlugin {
     const minChars = config.minExtractedContentLength ?? 50;
     if (!content || content.length < minChars) return null;
 
+    // Extract representative image (og:image → twitter:image → first product/content image)
+    const image =
+      $('meta[property="og:image"]').attr('content') ||
+      $('meta[name="twitter:image"]').attr('content') ||
+      $('meta[property="product:image"]').attr('content') ||
+      $('[itemtype*="schema.org/Product"] img, .product img, .product-image img, #product-image img')
+        .first().attr('src') ||
+      undefined;
+
+    // Resolve relative image URLs to absolute
+    let imageUrl: string | undefined;
+    if (image) {
+      try {
+        imageUrl = new URL(image, url).href;
+      } catch {
+        imageUrl = image;
+      }
+    }
+
     // Determine content type from URL
     let type = config.defaultType || 'page';
     if (config.typeFromUrl) {
@@ -2124,6 +2143,7 @@ export class WebRAGPlugin implements RAGPlugin {
         type,
         title,
         url,
+        ...(imageUrl ? { imageUrl } : {}),
         ...config.metadata,
       },
     };
