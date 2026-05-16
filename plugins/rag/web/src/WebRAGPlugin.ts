@@ -352,6 +352,8 @@ export class WebRAGPlugin implements RAGPlugin {
           type: doc.metadata.type,
           title: doc.metadata.title,
           url: doc.metadata.url,
+          imageUrl: doc.metadata.imageUrl,
+          description: doc.metadata.description,
           score: doc.score,
         })),
       },
@@ -2105,13 +2107,15 @@ export class WebRAGPlugin implements RAGPlugin {
     const minChars = config.minExtractedContentLength ?? 50;
     if (!content || content.length < minChars) return null;
 
-    // Extract representative image (og:image → twitter:image → first product/content image)
+    // Extract representative image (priority chain)
     const image =
       $('meta[property="og:image"]').attr('content') ||
       $('meta[name="twitter:image"]').attr('content') ||
       $('meta[property="product:image"]').attr('content') ||
       $('[itemtype*="schema.org/Product"] img, .product img, .product-image img, #product-image img')
         .first().attr('src') ||
+      // Fallback: largest/first meaningful image in main content area
+      this.extractHeroImage($, url) ||
       undefined;
 
     // Resolve relative image URLs to absolute
@@ -2154,6 +2158,50 @@ export class WebRAGPlugin implements RAGPlugin {
         ...config.metadata,
       },
     };
+  }
+
+  /**
+   * Fallback image extraction: finds the first meaningful image in the content area.
+   * Skips icons, avatars, and tiny assets by filtering on common patterns.
+   */
+  private extractHeroImage($: cheerio.CheerioAPI, pageUrl: string): string | undefined {
+    // Look in main content containers first, fall back to body
+    const containers = $('main, article, [role="main"], #content, .content');
+    const scope = containers.length > 0 ? containers : $('body');
+
+    let best: string | undefined;
+    scope.find('img[src]').each((_, el) => {
+      if (best) return false; // stop after first match
+      const src = $(el).attr('src') || '';
+      const alt = ($(el).attr('alt') || '').toLowerCase();
+      const width = parseInt($(el).attr('width') || '0', 10);
+      const height = parseInt($(el).attr('height') || '0', 10);
+
+      // Skip tiny images (icons, tracking pixels)
+      if ((width > 0 && width < 80) || (height > 0 && height < 80)) return;
+      // Skip common non-content patterns
+      if (/logo|icon|avatar|favicon|badge|spinner|loading/i.test(src + ' ' + alt)) return;
+      // Skip data URIs and SVGs
+      if (src.startsWith('data:') || src.endsWith('.svg')) return;
+
+      // Resolve relative/Next.js /_next/image URLs
+      if (src.includes('/_next/image')) {
+        // Extract the actual image URL from Next.js proxy: /_next/image?url=<encoded>&...
+        try {
+          const nextUrl = new URL(src, pageUrl);
+          const realUrl = nextUrl.searchParams.get('url');
+          if (realUrl) {
+            best = realUrl.startsWith('http') ? realUrl : new URL(realUrl, pageUrl).href;
+            return false;
+          }
+        } catch { /* fall through */ }
+      }
+
+      best = src;
+      return false;
+    });
+
+    return best;
   }
 
   private looksLikeDynamicShell(html: string): boolean {
