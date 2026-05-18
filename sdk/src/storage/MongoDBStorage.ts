@@ -170,20 +170,16 @@ export class MongoDBStorage implements StorageAdapter {
     await collection.deleteOne({ _id: new ObjectId(agentId) });
   }
 
-  async listAgents(
-    userId: string,
-    organizationId?: string
-  ): Promise<AgentData[]> {
+  async listAgents(userId: string, organizationId?: string): Promise<AgentData[]> {
     const db = await this.ensureConnection();
     const collection: Collection<AgentDocument> = db.collection(
       this.config.agentsCollection
     );
-
-    const query: any = { userId };
-    if (organizationId) {
-      query.organizationId = organizationId;
-    }
-
+  
+    const query: any = organizationId
+      ? { organizationId }                              // todos los agentes de la org
+      : { userId, organizationId: { $exists: false } }; // solo agentes personales del user
+  
     const docs = await collection.find(query).sort({ updatedAt: -1 }).toArray();
     return docs.map((doc) => this.agentDocToData(doc));
   }
