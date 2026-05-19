@@ -1,4 +1,4 @@
-# SnapAgent
+# AgentSnap SDK
 
 **The extensible, lightweight AI Agent SDK that runs everywhere**
 
@@ -6,6 +6,10 @@ Build stateful agents with multi-provider support. Extensible via plugins. Edge-
 
 [![npm version](https://img.shields.io/npm/v/@snap-agent/core.svg)](https://www.npmjs.com/package/@snap-agent/core)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+Published by [ViloTech.co](https://www.vilotech.co/)
+
+hello@vilotech.co
 
 ## Why SnapAgent?
 
@@ -678,4 +682,5 @@ Contributions are welcome! Please open an issue or submit a pull request on [Git
 ## Support
 
 - [GitHub Issues](https://github.com/vilo-hq/snap-agent/issues)
+- https://www.vilotech.co/contact
 
