@@ -49,6 +49,9 @@ import type {
   CrawlPageStatusEntry,
   RSSConfig,
   CrawlResult,
+  CrawlProgressCallback,
+  CrawlProgressUpdate,
+  CrawlPageEvent,
 } from './types';
 
 // ============================================================================
@@ -99,6 +102,8 @@ export class WebRAGPlugin implements RAGPlugin {
     return this.db!.collection<StoredWebDocument>(this.config.collection!);
   }
 
+  private ledgerIndexesEnsured = false;
+
   private async getLedgerCollection(): Promise<Collection<CrawlLedgerDocument>> {
     if (!this.client) {
       this.client = new MongoClient(this.config.mongoUri);
@@ -106,7 +111,16 @@ export class WebRAGPlugin implements RAGPlugin {
       this.db = this.client.db(this.config.dbName);
     }
     const name = this.config.crawlLedger?.collection ?? 'web_crawl_ledger';
-    return this.db!.collection<CrawlLedgerDocument>(name);
+    const col = this.db!.collection<CrawlLedgerDocument>(name);
+    if (!this.ledgerIndexesEnsured) {
+      this.ledgerIndexesEnsured = true;
+      await col.createIndex(
+        { tenantId: 1, agentId: 1, urlNormalized: 1 },
+        { unique: true },
+      );
+      await col.createIndex({ tenantId: 1, agentId: 1, ingestionId: 1, lastCrawledAt: -1 });
+    }
+    return col;
   }
 
   /**
@@ -115,6 +129,7 @@ export class WebRAGPlugin implements RAGPlugin {
   async listCrawlLedger(options: {
     agentId?: string;
     domain?: string;
+    ingestionId?: string;
     status?: CrawlLedgerStatus;
     limit?: number;
     skip?: number;
@@ -123,6 +138,7 @@ export class WebRAGPlugin implements RAGPlugin {
     const filter: Record<string, unknown> = { tenantId: this.config.tenantId };
     filter.agentId = options.agentId ?? 'shared';
     if (options.domain) filter.domain = options.domain;
+    if (options.ingestionId) filter.ingestionId = options.ingestionId;
     if (options.status) filter.lastStatus = options.status;
     const limit = Math.min(Math.max(options.limit ?? 50, 1), 500);
     const skip = Math.max(options.skip ?? 0, 0);
@@ -203,10 +219,14 @@ export class WebRAGPlugin implements RAGPlugin {
     url: string;
     urlNormalized: string;
     agentId: string;
+    ingestionId?: string;
     status: CrawlLedgerStatus;
     doc?: RAGDocument | null;
     diag?: { modeUsed?: string; reason?: string; errorMessage?: string };
     errorMessage?: string;
+    title?: string | null;
+    docId?: string | null;
+    contentLength?: number | null;
   }): Promise<void> {
     const col = await this.getLedgerCollection();
     let domain = '';
@@ -227,6 +247,9 @@ export class WebRAGPlugin implements RAGPlugin {
       lastCrawledAt: now,
       updatedAt: now,
     };
+    if (params.ingestionId) {
+      $set.ingestionId = params.ingestionId;
+    }
     if (errMsg !== undefined) {
       $set.errorMessage = errMsg;
     } else if (params.status === 'indexed' && params.doc) {
@@ -239,9 +262,9 @@ export class WebRAGPlugin implements RAGPlugin {
       $set.docId = params.doc.id;
     } else {
       $set.modeUsed = params.diag?.modeUsed;
-      $set.contentLength = null;
-      $set.title = null;
-      $set.docId = null;
+      $set.contentLength = params.contentLength ?? null;
+      $set.title = params.title ?? null;
+      $set.docId = params.docId ?? null;
     }
     await col.updateOne(
       {
@@ -574,9 +597,30 @@ export class WebRAGPlugin implements RAGPlugin {
     const errors: Array<{ id: string; error: string }> = [];
     const agentId = options?.agentId || 'shared';
 
-    for (const doc of documents) {
+    const onCrawlProgress = (options as { metadata?: Record<string, unknown> } | undefined)
+      ?.metadata?.onCrawlProgress as CrawlProgressCallback | undefined;
+    const indexingTotal = documents.length;
+    const chunkPlan = documents.map((doc) => this.chunkContent(doc.content));
+    const chunksTotal = chunkPlan.reduce((sum, chunks) => sum + chunks.length, 0);
+    let chunksProcessed = 0;
+
+    if (onCrawlProgress && indexingTotal > 0) {
+      this.emitCrawlProgress(
+        { metadata: options?.metadata },
+        {
+          phase: 'indexing',
+          urlsScheduled: indexingTotal,
+          pagesProcessed: 0,
+          chunksTotal,
+          chunksProcessed: 0,
+        },
+      );
+    }
+
+    for (let docIndex = 0; docIndex < documents.length; docIndex++) {
+      const doc = documents[docIndex];
+      const chunks = chunkPlan[docIndex]!;
       try {
-        const chunks = this.chunkContent(doc.content);
         const isChunked = chunks.length > 1;
 
         // Remove any previous chunks for this document before re-ingesting
@@ -617,6 +661,20 @@ export class WebRAGPlugin implements RAGPlugin {
             },
             { upsert: true }
           );
+
+          chunksProcessed++;
+          if (onCrawlProgress) {
+            this.emitCrawlProgress(
+              { metadata: options?.metadata },
+              {
+                phase: 'indexing',
+                urlsScheduled: indexingTotal,
+                pagesProcessed: docIndex + (i + 1 === chunks.length ? 1 : 0),
+                chunksTotal,
+                chunksProcessed,
+              },
+            );
+          }
         }
 
         indexed++;
@@ -1464,6 +1522,8 @@ export class WebRAGPlugin implements RAGPlugin {
 
     const dbg = this.createDebugCollector(config.debug);
 
+    this.emitCrawlProgress(config, { phase: 'discovering', urlsDiscovered: 0 });
+
     const base = this.normalizeWebsiteUrl(config.baseUrl, stripQueryParams);
     if (!base) {
       return {
@@ -1501,6 +1561,11 @@ export class WebRAGPlugin implements RAGPlugin {
           filteredUrls = filteredUrls.filter(u => !config.excludePatterns!.some(p => u.includes(p)));
         }
 
+        this.emitCrawlProgress(config, {
+          phase: 'discovering',
+          urlsDiscovered: filteredUrls.length,
+        });
+
         urlsToCrawl = filteredUrls.slice(0, maxPages);
         urlsSkipped = Math.max(0, filteredUrls.length - urlsToCrawl.length);
         break;
@@ -1524,7 +1589,17 @@ export class WebRAGPlugin implements RAGPlugin {
       urlsToCrawl = discovery.urls;
       urlsSkipped = discovery.skipped;
       dbg.log('discovery.linkLookup', { discovered: urlsToCrawl.length, skipped: urlsSkipped });
+      this.emitCrawlProgress(config, {
+        phase: 'discovering',
+        urlsDiscovered: urlsToCrawl.length,
+      });
     }
+
+    this.emitCrawlProgress(config, {
+      phase: 'crawling',
+      urlsDiscovered: urlsToCrawl.length,
+      urlsScheduled: urlsToCrawl.length,
+    });
 
     const result = await this.crawlUrls(urlsToCrawl, {
       contentSelector: config.contentSelector,
@@ -1548,9 +1623,12 @@ export class WebRAGPlugin implements RAGPlugin {
     return {
       ...result,
       urlsSkipped,
+      /** URLs selected for this crawl (≤ maxPages); use for progress UI denominador. */
+      urlsScheduled: urlsToCrawl.length,
       crawledAt: new Date(),
       metadata: {
         ...(result.metadata || {}),
+        urlsScheduled: urlsToCrawl.length,
         discoveryDebug: dbg.summary(),
       },
     };
@@ -1848,6 +1926,10 @@ export class WebRAGPlugin implements RAGPlugin {
     const forceRecrawl = !!(options && (options as { forceRecrawl?: boolean }).forceRecrawl);
     const agentId = (options?.agentId as string | undefined) ?? 'shared';
     const stripQ = config.stripQueryParams ?? false;
+    const ingestionId =
+      typeof config.metadata?.ingestionId === 'string' && config.metadata.ingestionId.trim()
+        ? config.metadata.ingestionId.trim()
+        : undefined;
 
     const urlByNorm = new Map<string, string>();
     for (const u of urls) {
@@ -1882,6 +1964,7 @@ export class WebRAGPlugin implements RAGPlugin {
       const results = await Promise.allSettled(
         batch.map(async (url) => {
           const urlNormalized = this.normalizeLedgerUrl(url, stripQ) || url;
+          this.emitCrawlPage(config, { url, event: 'start' });
 
           if (ledgerOpts && !forceRecrawl) {
             const entry = await this.findLedgerEntry(urlNormalized, agentId);
@@ -1905,6 +1988,19 @@ export class WebRAGPlugin implements RAGPlugin {
                 docId: entry?.docId,
               });
               dbg.log('crawl.ledgerSkip', { url, urlNormalized, lastStatus: entry?.lastStatus });
+              if (ledgerOpts) {
+                await this.upsertLedgerRecord({
+                  url,
+                  urlNormalized,
+                  agentId,
+                  ingestionId,
+                  status: 'skipped_ledger',
+                  title: entry?.title,
+                  docId: entry?.docId,
+                  contentLength: entry?.contentLength,
+                });
+              }
+              this.emitCrawlPage(config, { url, event: 'done', status: 'skipped_ledger' });
               return { kind: 'ledger_skip' as const, url };
             }
           }
@@ -1930,6 +2026,7 @@ export class WebRAGPlugin implements RAGPlugin {
                 url,
                 urlNormalized,
                 agentId,
+                ingestionId,
                 status: crawlSt,
                 doc,
                 diag,
@@ -1948,6 +2045,12 @@ export class WebRAGPlugin implements RAGPlugin {
               error: diag?.errorMessage,
             });
 
+            this.emitCrawlPage(config, {
+              url,
+              event: 'done',
+              status: crawlSt,
+              error: diag?.errorMessage,
+            });
             return { kind: 'doc' as const, doc, url };
           } catch (error) {
             const msg = error instanceof Error ? error.message : String(error);
@@ -1956,6 +2059,7 @@ export class WebRAGPlugin implements RAGPlugin {
                 url,
                 urlNormalized,
                 agentId,
+                ingestionId,
                 status: 'error',
                 errorMessage: msg,
               });
@@ -1966,6 +2070,7 @@ export class WebRAGPlugin implements RAGPlugin {
               status: 'error',
               error: msg,
             });
+            this.emitCrawlPage(config, { url, event: 'done', status: 'error', error: msg });
             throw { url, error };
           }
         })
@@ -1990,15 +2095,27 @@ export class WebRAGPlugin implements RAGPlugin {
         }
       }
 
+      this.emitCrawlProgress(config, {
+        phase: 'crawling',
+        urlsScheduled: uniqueUrls.length,
+        pagesProcessed: Math.min(i + batch.length, uniqueUrls.length),
+      });
+
       // Delay between batches
       if (i + concurrency < uniqueUrls.length) {
         await this.delay(delayMs);
       }
     }
 
-    // Ingest collected documents
+    // Ingest collected documents (embeddings → web_content; progress phase `indexing`)
     if (documents.length > 0) {
-      const ingestResult = await this.ingest(documents, options);
+      const ingestResult = await this.ingest(documents, {
+        ...options,
+        metadata: {
+          ...((options as { metadata?: Record<string, unknown> } | undefined)?.metadata ?? {}),
+          onCrawlProgress: config.metadata?.onCrawlProgress,
+        },
+      });
       indexed = ingestResult.indexed;
       if (ingestResult.errors) {
         errors.push(...ingestResult.errors);
@@ -2532,6 +2649,32 @@ export class WebRAGPlugin implements RAGPlugin {
     return Array.from(found);
   }
 
+  private emitCrawlProgress(
+    config: { metadata?: Record<string, unknown> },
+    update: CrawlProgressUpdate,
+  ): void {
+    const fn = config.metadata?.onCrawlProgress as CrawlProgressCallback | undefined;
+    if (!fn) return;
+    try {
+      fn(update);
+    } catch {
+      /* progress hook must not abort ingest */
+    }
+  }
+
+  private emitCrawlPage(
+    config: { metadata?: Record<string, unknown> },
+    event: CrawlPageEvent,
+  ): void {
+    const fn = config.metadata?.onCrawlPage as ((e: CrawlPageEvent) => void) | undefined;
+    if (!fn) return;
+    try {
+      fn(event);
+    } catch {
+      /* page hook must not abort ingest */
+    }
+  }
+
   private createDebugCollector(debug?: DebugOptions) {
     const enabled = !!debug?.enabled;
     const level = debug?.level || 'summary';
@@ -2895,6 +3038,7 @@ export class WebRAGPlugin implements RAGPlugin {
       filterableFields: this.config.filterableFields,
       typeBoosts: this.config.typeBoosts,
       recencyBoost: this.config.recencyBoost,
+      crawlLedger: this.config.crawlLedger,
       priority: this.priority,
     };
   }
