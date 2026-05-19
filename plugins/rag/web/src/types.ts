@@ -154,6 +154,8 @@ export interface CrawlPageStatusEntry {
 export interface CrawlLedgerDocument {
   tenantId: string;
   agentId: string;
+  /** Correlates ledger rows with a single ingest run (from crawl metadata.ingestionId). */
+  ingestionId?: string;
   urlNormalized: string;
   url: string;
   domain: string;
@@ -504,10 +506,41 @@ export interface RSSConfig {
 /**
  * Crawl result for sitemap/URL crawling
  */
+export type CrawlProgressPhase = 'discovering' | 'crawling' | 'indexing';
+
+/** Live crawl progress (via `metadata.onCrawlProgress` on WebsiteCrawlConfig). */
+export interface CrawlProgressUpdate {
+  phase: CrawlProgressPhase;
+  /** URLs found in sitemap/BFS (may exceed urlsScheduled when capped by maxPages). */
+  urlsDiscovered?: number;
+  /** URLs that will be crawled in this run (≤ maxPages). */
+  urlsScheduled?: number;
+  /** During crawl: batches done. During indexing: documents fully embedded so far. */
+  pagesProcessed?: number;
+  /** During indexing: total text chunks to embed (drives web_content writes). */
+  chunksTotal?: number;
+  /** During indexing: chunks embedded so far. */
+  chunksProcessed?: number;
+}
+
+export type CrawlProgressCallback = (update: CrawlProgressUpdate) => void;
+
+/** Per-URL crawl lifecycle (via `metadata.onCrawlPage` on WebsiteCrawlConfig). */
+export type CrawlPageEvent = {
+  url: string;
+  event: 'start' | 'done';
+  status?: string;
+  error?: string;
+};
+
+export type CrawlPageCallback = (event: CrawlPageEvent) => void;
+
 export interface CrawlResult extends WebIngestResult {
   urlsCrawled: number;
   urlsSkipped: number;
   urlsFailed: number;
+  /** URLs selected for this crawl batch (≤ maxPages); for progress UI. */
+  urlsScheduled?: number;
   crawledAt: Date;
 }
 

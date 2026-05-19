@@ -5,11 +5,13 @@ import { WebRAGPlugin } from '../src/WebRAGPlugin';
 const mongoLedger = vi.hoisted(() => {
   const toArrayFind = vi.fn().mockResolvedValue([]);
   const mockFindOne = vi.fn().mockResolvedValue(null);
+  const mockUpdateOne = vi.fn().mockResolvedValue({ upsertedCount: 1 });
   const mockCollection = {
     aggregate: vi.fn().mockReturnValue({
       toArray: vi.fn().mockResolvedValue([]),
     }),
-    updateOne: vi.fn().mockResolvedValue({ upsertedCount: 1 }),
+    updateOne: mockUpdateOne,
+    createIndex: vi.fn().mockResolvedValue('idx'),
     deleteMany: vi.fn().mockResolvedValue({ deletedCount: 1 }),
     findOne: mockFindOne,
     find: vi.fn().mockReturnValue({
@@ -33,6 +35,7 @@ const mongoLedger = vi.hoisted(() => {
   return {
     MongoClient: vi.fn().mockImplementation(() => mockClient),
     mockFindOne,
+    mockUpdateOne,
     toArrayFind,
   };
 });
@@ -1349,6 +1352,87 @@ describe('WebRAGPlugin', () => {
       const rows = await ledgerPlugin.listCrawlLedger({ limit: 5 });
       expect(rows).toHaveLength(1);
       expect(rows[0].url).toBe('https://example.com/a');
+      await ledgerPlugin.disconnect();
+    });
+
+    it('should persist ingestionId on ledger upsert when metadata.ingestionId is set', async () => {
+      mongoLedger.mockUpdateOne.mockClear();
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        headers: { get: () => 'text/html' },
+        text: async () =>
+          '<html><head><title>Page</title></head><body><p>' +
+          'x'.repeat(400) +
+          '</p></body></html>',
+      });
+
+      const ledgerPlugin = new WebRAGPlugin({
+        mongoUri: 'mongodb://localhost:27017',
+        dbName: 'test_db',
+        openaiApiKey: 'test-key',
+        tenantId: 'test-tenant',
+        crawlLedger: { enabled: true },
+      });
+
+      await ledgerPlugin.ingestFromUrls(
+        ['https://example.com/page'],
+        {
+          type: 'page',
+          concurrency: 1,
+          stripQueryParams: true,
+          metadata: { ingestionId: 'ing-test-1' },
+        },
+        { agentId: 'agent-1' },
+      );
+
+      const ledgerUpsert = mongoLedger.mockUpdateOne.mock.calls.find(
+        (call) => call[1]?.$set?.lastStatus !== undefined,
+      );
+      expect(ledgerUpsert).toBeDefined();
+      expect(ledgerUpsert?.[1]?.$set?.ingestionId).toBe('ing-test-1');
+      await ledgerPlugin.disconnect();
+    });
+
+    it('should filter listCrawlLedger by ingestionId', async () => {
+      const mockFind = vi.fn().mockReturnValue({
+        sort: vi.fn().mockReturnValue({
+          skip: vi.fn().mockReturnValue({
+            limit: vi.fn().mockReturnValue({
+              toArray: vi.fn().mockResolvedValue([]),
+            }),
+          }),
+        }),
+      });
+      mongoLedger.MongoClient.mockImplementation(() => ({
+        connect: vi.fn().mockResolvedValue(undefined),
+        close: vi.fn().mockResolvedValue(undefined),
+        db: vi.fn().mockReturnValue({
+          collection: vi.fn().mockReturnValue({
+            find: mockFind,
+            createIndex: vi.fn().mockResolvedValue('idx'),
+            updateOne: mongoLedger.mockUpdateOne,
+            findOne: mongoLedger.mockFindOne,
+          }),
+        }),
+      }));
+
+      const ledgerPlugin = new WebRAGPlugin({
+        mongoUri: 'mongodb://localhost:27017',
+        dbName: 'test_db',
+        openaiApiKey: 'test-key',
+        tenantId: 'test-tenant',
+        crawlLedger: { enabled: true },
+      });
+
+      await ledgerPlugin.listCrawlLedger({ ingestionId: 'ing-abc', agentId: 'agent-1' });
+
+      expect(mockFind).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tenantId: 'test-tenant',
+          agentId: 'agent-1',
+          ingestionId: 'ing-abc',
+        }),
+      );
       await ledgerPlugin.disconnect();
     });
   });

@@ -23,6 +23,11 @@ export type {
   CrawlPageStatusEntry,
   RSSConfig,
   CrawlResult,
+  CrawlProgressUpdate,
+  CrawlProgressCallback,
+  CrawlPageEvent,
+  CrawlPageCallback,
+  CrawlProgressPhase,
   WebIngestResult,
   WebURLIngestResult,
 } from './types';
