@@ -49,10 +49,33 @@ import type {
   CrawlPageStatusEntry,
   RSSConfig,
   CrawlResult,
+  BulkProgressCallback,
+  BulkProgressUpdate,
   CrawlProgressCallback,
   CrawlProgressUpdate,
   CrawlPageEvent,
 } from './types';
+
+function bulkOpCurrentUrl(op: BulkOperation): string | undefined {
+  const meta = op.document?.metadata as { url?: string; source?: string } | undefined;
+  if (typeof meta?.url === 'string' && meta.url.trim()) return meta.url.trim();
+  if (typeof meta?.source === 'string' && meta.source.trim()) return meta.source.trim();
+  return undefined;
+}
+
+/** UI bulk URL panel: metadata.type url + http(s) URL → crawl page instead of indexing literal input text. */
+function isUrlListingInsert(document: { metadata?: Record<string, unknown> }): boolean {
+  const meta = document.metadata;
+  if (meta?.type !== 'url') return false;
+  const url = typeof meta.url === 'string' ? meta.url.trim() : '';
+  if (!url) return false;
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
 
 // ============================================================================
 // Web RAG Plugin
@@ -779,24 +802,61 @@ export class WebRAGPlugin implements RAGPlugin {
     let deleted = 0;
     let failed = 0;
     const errors: Array<{ id: string; operation: string; error: string }> = [];
+    const opsTotal = operations.length;
+    let opsDone = 0;
+
+    const ingestOptions = options ?? {};
+    this.emitBulkProgress(ingestOptions, {
+      phase: 'processing',
+      opsTotal,
+      opsDone: 0,
+    });
 
     for (const op of operations) {
+      const currentUrl = bulkOpCurrentUrl(op);
       try {
         switch (op.type) {
           case 'insert':
             if (op.document) {
-              await this.ingest([op.document], options);
-              inserted++;
+              if (isUrlListingInsert(op.document)) {
+                const url = bulkOpCurrentUrl(op)!;
+                const crawlResult = await this.ingestSinglePageFromUrl(
+                  {
+                    url,
+                    metadata: {
+                      ...(op.document.metadata ?? {}),
+                      url,
+                    },
+                  },
+                  ingestOptions,
+                );
+                if (crawlResult.indexed > 0) {
+                  inserted++;
+                } else {
+                  failed++;
+                  const err =
+                    crawlResult.errors?.[0]?.error ??
+                    `Failed to crawl ${url}`;
+                  errors.push({
+                    id: op.id,
+                    operation: op.type,
+                    error: err,
+                  });
+                }
+              } else {
+                await this.ingest([op.document], ingestOptions);
+                inserted++;
+              }
             }
             break;
           case 'update':
             if (op.document) {
-              await this.update(op.id, op.document, options);
+              await this.update(op.id, op.document, ingestOptions);
               updated++;
             }
             break;
           case 'delete':
-            const count = await this.delete(op.id, options);
+            const count = await this.delete(op.id, ingestOptions);
             deleted += count;
             break;
         }
@@ -806,6 +866,15 @@ export class WebRAGPlugin implements RAGPlugin {
           id: op.id,
           operation: op.type,
           error: error.message || 'Unknown error',
+        });
+      } finally {
+        opsDone++;
+        this.emitBulkProgress(ingestOptions, {
+          phase: 'processing',
+          opsTotal,
+          opsDone,
+          currentOpType: op.type,
+          ...(currentUrl ? { currentUrl } : {}),
         });
       }
     }
@@ -2647,6 +2716,20 @@ export class WebRAGPlugin implements RAGPlugin {
     }
 
     return Array.from(found);
+  }
+
+  private emitBulkProgress(
+    options: IngestOptions | undefined,
+    update: BulkProgressUpdate,
+  ): void {
+    const fn = (options as { metadata?: Record<string, unknown> } | undefined)?.metadata
+      ?.onBulkProgress as BulkProgressCallback | undefined;
+    if (!fn) return;
+    try {
+      fn(update);
+    } catch {
+      /* progress hook must not abort bulk */
+    }
   }
 
   private emitCrawlProgress(

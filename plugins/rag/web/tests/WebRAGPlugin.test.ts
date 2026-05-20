@@ -219,6 +219,105 @@ describe('WebRAGPlugin', () => {
       expect(result.updated).toBe(1);
       expect(result.deleted).toBe(1);
     });
+
+    it('should emit bulk and crawl progress callbacks on insert', async () => {
+      const bulkUpdates: Array<{ phase: string; opsDone: number; opsTotal: number }> = [];
+      const crawlUpdates: Array<{ phase: string; chunksTotal?: number }> = [];
+
+      const operations = [
+        {
+          type: 'insert' as const,
+          id: 'u1',
+          document: {
+            id: 'u1',
+            content: 'https://example.com/a',
+            metadata: { url: 'https://example.com/a', type: 'page' },
+          },
+        },
+        {
+          type: 'insert' as const,
+          id: 'u2',
+          document: {
+            id: 'u2',
+            content: 'https://example.com/b',
+            metadata: { url: 'https://example.com/b', type: 'page' },
+          },
+        },
+        {
+          type: 'insert' as const,
+          id: 'u3',
+          document: {
+            id: 'u3',
+            content: 'https://example.com/c',
+            metadata: { url: 'https://example.com/c', type: 'page' },
+          },
+        },
+      ];
+
+      await plugin.bulk(operations, {
+        agentId: 'agent-1',
+        metadata: {
+          onBulkProgress: (u) => {
+            bulkUpdates.push({
+              phase: u.phase,
+              opsDone: u.opsDone,
+              opsTotal: u.opsTotal,
+            });
+          },
+          onCrawlProgress: (u) => {
+            crawlUpdates.push({ phase: u.phase, chunksTotal: u.chunksTotal });
+          },
+        },
+      });
+
+      expect(bulkUpdates.length).toBeGreaterThanOrEqual(4);
+      expect(bulkUpdates[0]).toEqual({ phase: 'processing', opsDone: 0, opsTotal: 3 });
+      expect(bulkUpdates[bulkUpdates.length - 1]?.opsDone).toBe(3);
+      expect(crawlUpdates.some((u) => u.phase === 'indexing' && (u.chunksTotal ?? 0) > 0)).toBe(
+        true,
+      );
+    });
+
+    it('should crawl URL listing inserts instead of indexing literal input text', async () => {
+      const crawlSpy = vi
+        .spyOn(plugin, 'ingestSinglePageFromUrl')
+        .mockResolvedValue({
+          success: true,
+          indexed: 1,
+          failed: 0,
+          urlsCrawled: 1,
+          urlsSkipped: 0,
+          urlsFailed: 0,
+          crawledAt: new Date(),
+        });
+
+      const ingestSpy = vi.spyOn(plugin, 'ingest');
+
+      await plugin.bulk([
+        {
+          type: 'insert',
+          id: 'page-1',
+          document: {
+            id: 'page-1',
+            content: 'My label\n\nhttps://example.com/page',
+            metadata: {
+              type: 'url',
+              url: 'https://example.com/page',
+              title: 'My label',
+            },
+          },
+        },
+      ]);
+
+      expect(crawlSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ url: 'https://example.com/page' }),
+        expect.anything(),
+      );
+      expect(ingestSpy).not.toHaveBeenCalled();
+
+      crawlSpy.mockRestore();
+      ingestSpy.mockRestore();
+    });
   });
 
   describe('ingestFromUrl', () => {
