@@ -525,6 +525,19 @@ export interface CrawlProgressUpdate {
 
 export type CrawlProgressCallback = (update: CrawlProgressUpdate) => void;
 
+export type BulkProgressPhase = 'processing' | 'indexing';
+
+/** Live bulk progress (via `metadata.onBulkProgress` on IngestOptions). */
+export interface BulkProgressUpdate {
+  phase: BulkProgressPhase;
+  opsTotal: number;
+  opsDone: number;
+  currentOpType?: 'insert' | 'update' | 'delete';
+  currentUrl?: string;
+}
+
+export type BulkProgressCallback = (update: BulkProgressUpdate) => void;
+
 /** Per-URL crawl lifecycle (via `metadata.onCrawlPage` on WebsiteCrawlConfig). */
 export type CrawlPageEvent = {
   url: string;

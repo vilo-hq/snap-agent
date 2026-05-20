@@ -28,6 +28,9 @@ export type {
   CrawlPageEvent,
   CrawlPageCallback,
   CrawlProgressPhase,
+  BulkProgressUpdate,
+  BulkProgressCallback,
+  BulkProgressPhase,
   WebIngestResult,
   WebURLIngestResult,
 } from './types';
