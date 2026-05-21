@@ -5,11 +5,13 @@ import { WebRAGPlugin } from '../src/WebRAGPlugin';
 const mongoLedger = vi.hoisted(() => {
   const toArrayFind = vi.fn().mockResolvedValue([]);
   const mockFindOne = vi.fn().mockResolvedValue(null);
+  const mockUpdateOne = vi.fn().mockResolvedValue({ upsertedCount: 1 });
   const mockCollection = {
     aggregate: vi.fn().mockReturnValue({
       toArray: vi.fn().mockResolvedValue([]),
     }),
-    updateOne: vi.fn().mockResolvedValue({ upsertedCount: 1 }),
+    updateOne: mockUpdateOne,
+    createIndex: vi.fn().mockResolvedValue('idx'),
     deleteMany: vi.fn().mockResolvedValue({ deletedCount: 1 }),
     findOne: mockFindOne,
     find: vi.fn().mockReturnValue({
@@ -33,6 +35,7 @@ const mongoLedger = vi.hoisted(() => {
   return {
     MongoClient: vi.fn().mockImplementation(() => mockClient),
     mockFindOne,
+    mockUpdateOne,
     toArrayFind,
   };
 });
@@ -215,6 +218,105 @@ describe('WebRAGPlugin', () => {
       expect(result.inserted).toBe(1);
       expect(result.updated).toBe(1);
       expect(result.deleted).toBe(1);
+    });
+
+    it('should emit bulk and crawl progress callbacks on insert', async () => {
+      const bulkUpdates: Array<{ phase: string; opsDone: number; opsTotal: number }> = [];
+      const crawlUpdates: Array<{ phase: string; chunksTotal?: number }> = [];
+
+      const operations = [
+        {
+          type: 'insert' as const,
+          id: 'u1',
+          document: {
+            id: 'u1',
+            content: 'https://example.com/a',
+            metadata: { url: 'https://example.com/a', type: 'page' },
+          },
+        },
+        {
+          type: 'insert' as const,
+          id: 'u2',
+          document: {
+            id: 'u2',
+            content: 'https://example.com/b',
+            metadata: { url: 'https://example.com/b', type: 'page' },
+          },
+        },
+        {
+          type: 'insert' as const,
+          id: 'u3',
+          document: {
+            id: 'u3',
+            content: 'https://example.com/c',
+            metadata: { url: 'https://example.com/c', type: 'page' },
+          },
+        },
+      ];
+
+      await plugin.bulk(operations, {
+        agentId: 'agent-1',
+        metadata: {
+          onBulkProgress: (u) => {
+            bulkUpdates.push({
+              phase: u.phase,
+              opsDone: u.opsDone,
+              opsTotal: u.opsTotal,
+            });
+          },
+          onCrawlProgress: (u) => {
+            crawlUpdates.push({ phase: u.phase, chunksTotal: u.chunksTotal });
+          },
+        },
+      });
+
+      expect(bulkUpdates.length).toBeGreaterThanOrEqual(4);
+      expect(bulkUpdates[0]).toEqual({ phase: 'processing', opsDone: 0, opsTotal: 3 });
+      expect(bulkUpdates[bulkUpdates.length - 1]?.opsDone).toBe(3);
+      expect(crawlUpdates.some((u) => u.phase === 'indexing' && (u.chunksTotal ?? 0) > 0)).toBe(
+        true,
+      );
+    });
+
+    it('should crawl URL listing inserts instead of indexing literal input text', async () => {
+      const crawlSpy = vi
+        .spyOn(plugin, 'ingestSinglePageFromUrl')
+        .mockResolvedValue({
+          success: true,
+          indexed: 1,
+          failed: 0,
+          urlsCrawled: 1,
+          urlsSkipped: 0,
+          urlsFailed: 0,
+          crawledAt: new Date(),
+        });
+
+      const ingestSpy = vi.spyOn(plugin, 'ingest');
+
+      await plugin.bulk([
+        {
+          type: 'insert',
+          id: 'page-1',
+          document: {
+            id: 'page-1',
+            content: 'My label\n\nhttps://example.com/page',
+            metadata: {
+              type: 'url',
+              url: 'https://example.com/page',
+              title: 'My label',
+            },
+          },
+        },
+      ]);
+
+      expect(crawlSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ url: 'https://example.com/page' }),
+        expect.anything(),
+      );
+      expect(ingestSpy).not.toHaveBeenCalled();
+
+      crawlSpy.mockRestore();
+      ingestSpy.mockRestore();
     });
   });
 
@@ -1349,6 +1451,87 @@ describe('WebRAGPlugin', () => {
       const rows = await ledgerPlugin.listCrawlLedger({ limit: 5 });
       expect(rows).toHaveLength(1);
       expect(rows[0].url).toBe('https://example.com/a');
+      await ledgerPlugin.disconnect();
+    });
+
+    it('should persist ingestionId on ledger upsert when metadata.ingestionId is set', async () => {
+      mongoLedger.mockUpdateOne.mockClear();
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        headers: { get: () => 'text/html' },
+        text: async () =>
+          '<html><head><title>Page</title></head><body><p>' +
+          'x'.repeat(400) +
+          '</p></body></html>',
+      });
+
+      const ledgerPlugin = new WebRAGPlugin({
+        mongoUri: 'mongodb://localhost:27017',
+        dbName: 'test_db',
+        openaiApiKey: 'test-key',
+        tenantId: 'test-tenant',
+        crawlLedger: { enabled: true },
+      });
+
+      await ledgerPlugin.ingestFromUrls(
+        ['https://example.com/page'],
+        {
+          type: 'page',
+          concurrency: 1,
+          stripQueryParams: true,
+          metadata: { ingestionId: 'ing-test-1' },
+        },
+        { agentId: 'agent-1' },
+      );
+
+      const ledgerUpsert = mongoLedger.mockUpdateOne.mock.calls.find(
+        (call) => call[1]?.$set?.lastStatus !== undefined,
+      );
+      expect(ledgerUpsert).toBeDefined();
+      expect(ledgerUpsert?.[1]?.$set?.ingestionId).toBe('ing-test-1');
+      await ledgerPlugin.disconnect();
+    });
+
+    it('should filter listCrawlLedger by ingestionId', async () => {
+      const mockFind = vi.fn().mockReturnValue({
+        sort: vi.fn().mockReturnValue({
+          skip: vi.fn().mockReturnValue({
+            limit: vi.fn().mockReturnValue({
+              toArray: vi.fn().mockResolvedValue([]),
+            }),
+          }),
+        }),
+      });
+      mongoLedger.MongoClient.mockImplementation(() => ({
+        connect: vi.fn().mockResolvedValue(undefined),
+        close: vi.fn().mockResolvedValue(undefined),
+        db: vi.fn().mockReturnValue({
+          collection: vi.fn().mockReturnValue({
+            find: mockFind,
+            createIndex: vi.fn().mockResolvedValue('idx'),
+            updateOne: mongoLedger.mockUpdateOne,
+            findOne: mongoLedger.mockFindOne,
+          }),
+        }),
+      }));
+
+      const ledgerPlugin = new WebRAGPlugin({
+        mongoUri: 'mongodb://localhost:27017',
+        dbName: 'test_db',
+        openaiApiKey: 'test-key',
+        tenantId: 'test-tenant',
+        crawlLedger: { enabled: true },
+      });
+
+      await ledgerPlugin.listCrawlLedger({ ingestionId: 'ing-abc', agentId: 'agent-1' });
+
+      expect(mockFind).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tenantId: 'test-tenant',
+          agentId: 'agent-1',
+          ingestionId: 'ing-abc',
+        }),
+      );
       await ledgerPlugin.disconnect();
     });
   });
