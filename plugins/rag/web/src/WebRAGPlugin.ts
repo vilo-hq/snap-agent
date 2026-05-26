@@ -26,6 +26,11 @@ import OpenAI from 'openai';
 import * as cheerio from 'cheerio';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import {
+  bodyTextLengthHint as htmlBodyTextLengthHint,
+  extractPageFromHtml,
+  urlToDocumentId,
+} from './htmlPageExtract';
 
 import type {
   WebRAGConfig,
@@ -400,6 +405,9 @@ export class WebRAGPlugin implements RAGPlugin {
           url: doc.metadata.url,
           imageUrl: doc.metadata.imageUrl,
           description: doc.metadata.description,
+          ...(doc.metadata.price != null ? { price: doc.metadata.price } : {}),
+          ...(doc.metadata.currency ? { currency: doc.metadata.currency } : {}),
+          ...(doc.metadata.availability ? { availability: doc.metadata.availability } : {}),
           score: doc.score,
         })),
       },
@@ -2237,157 +2245,19 @@ export class WebRAGPlugin implements RAGPlugin {
     return this.extractDocumentFromHtml(url, html, config);
   }
 
-  /**
-   * Default chain works for many WordPress / Elementor / block themes where `.first()`
-   * would otherwise hit an empty wrapper.
-   */
-  private static readonly DEFAULT_CONTENT_SELECTOR =
-    'article, main, [role="main"], #content, #primary, #main, .content, .post-content, ' +
-    '.entry-content, .elementor-location-content, .elementor-widget-theme-post-content, ' +
-    '.wp-block-group, .site-content, .ast-single-post, .ast-page';
-
-  private stripNoiseFromDom($: cheerio.CheerioAPI, config: SitemapConfig): void {
-    const removeSelectors = config.removeSelectors || [
-      'script', 'style', 'nav', 'header', 'footer',
-      '.sidebar', '.navigation', '.menu', '.comments',
-      '[role="navigation"]', '[role="banner"]',
-    ];
-    removeSelectors.forEach(selector => $(selector).remove());
-  }
-
-  /** Longest cleaned text among selector matches and full body (after noise strip). */
-  private extractBestContentText($: cheerio.CheerioAPI, config: SitemapConfig): string {
-    const contentSelector =
-      config.contentSelector || WebRAGPlugin.DEFAULT_CONTENT_SELECTOR;
-    const selectors = contentSelector.split(',').map(s => s.trim()).filter(Boolean);
-    let best = '';
-    for (const sel of selectors) {
-      $(sel).each((_, el) => {
-        const t = this.cleanContent($(el).text().trim());
-        if (t.length > best.length) best = t;
-      });
-    }
-    const bodyText = this.cleanContent($('body').text().trim());
-    if (bodyText.length > best.length) best = bodyText;
-    return best;
-  }
-
   private bodyTextLengthHint(html: string, config: SitemapConfig): number {
-    const $ = cheerio.load(html);
-    this.stripNoiseFromDom($, config);
-    return this.cleanContent($('body').text().trim()).length;
+    return htmlBodyTextLengthHint(html, config);
   }
 
   private extractDocumentFromHtml(url: string, html: string, config: SitemapConfig): RAGDocument | null {
-    const $ = cheerio.load(html);
-    this.stripNoiseFromDom($, config);
+    const extracted = extractPageFromHtml(url, html, config);
+    if (!extracted.indexable) return null;
 
-    // Extract title
-    const titleSelector = config.titleSelector || 'h1, title';
-    let title = $(titleSelector).first().text().trim();
-    if (!title) {
-      title = $('title').text().trim();
-    }
-
-    const content = this.extractBestContentText($, config);
-    const minChars = config.minExtractedContentLength ?? 50;
-    if (!content || content.length < minChars) return null;
-
-    // Extract representative image (priority chain)
-    const image =
-      $('meta[property="og:image"]').attr('content') ||
-      $('meta[name="twitter:image"]').attr('content') ||
-      $('meta[property="product:image"]').attr('content') ||
-      $('[itemtype*="schema.org/Product"] img, .product img, .product-image img, #product-image img')
-        .first().attr('src') ||
-      // Fallback: largest/first meaningful image in main content area
-      this.extractHeroImage($, url) ||
-      undefined;
-
-    // Resolve relative image URLs to absolute
-    let imageUrl: string | undefined;
-    if (image) {
-      try {
-        imageUrl = new URL(image, url).href;
-      } catch {
-        imageUrl = image;
-      }
-    }
-
-    // Extract page description (og:description → meta description)
-    const description =
-      $('meta[property="og:description"]').attr('content') ||
-      $('meta[name="description"]').attr('content') ||
-      undefined;
-
-    // Determine content type from URL
-    let type = config.defaultType || 'page';
-    if (config.typeFromUrl) {
-      for (const [pattern, typeName] of Object.entries(config.typeFromUrl)) {
-        if (url.includes(pattern)) {
-          type = typeName;
-          break;
-        }
-      }
-    }
-
-    const id = this.urlToId(url);
     return {
-      id,
-      content,
-      metadata: {
-        type,
-        title,
-        url,
-        ...(imageUrl ? { imageUrl } : {}),
-        ...(description ? { description } : {}),
-        ...config.metadata,
-      },
+      id: extracted.id,
+      content: extracted.content,
+      metadata: extracted.metadata as RAGDocument['metadata'],
     };
-  }
-
-  /**
-   * Fallback image extraction: finds the first meaningful image in the content area.
-   * Skips icons, avatars, and tiny assets by filtering on common patterns.
-   */
-  private extractHeroImage($: cheerio.CheerioAPI, pageUrl: string): string | undefined {
-    // Look in main content containers first, fall back to body
-    const containers = $('main, article, [role="main"], #content, .content');
-    const scope = containers.length > 0 ? containers : $('body');
-
-    let best: string | undefined;
-    scope.find('img[src]').each((_, el) => {
-      if (best) return false; // stop after first match
-      const src = $(el).attr('src') || '';
-      const alt = ($(el).attr('alt') || '').toLowerCase();
-      const width = parseInt($(el).attr('width') || '0', 10);
-      const height = parseInt($(el).attr('height') || '0', 10);
-
-      // Skip tiny images (icons, tracking pixels)
-      if ((width > 0 && width < 80) || (height > 0 && height < 80)) return;
-      // Skip common non-content patterns
-      if (/logo|icon|avatar|favicon|badge|spinner|loading/i.test(src + ' ' + alt)) return;
-      // Skip data URIs and SVGs
-      if (src.startsWith('data:') || src.endsWith('.svg')) return;
-
-      // Resolve relative/Next.js /_next/image URLs
-      if (src.includes('/_next/image')) {
-        // Extract the actual image URL from Next.js proxy: /_next/image?url=<encoded>&...
-        try {
-          const nextUrl = new URL(src, pageUrl);
-          const realUrl = nextUrl.searchParams.get('url');
-          if (realUrl) {
-            best = realUrl.startsWith('http') ? realUrl : new URL(realUrl, pageUrl).href;
-            return false;
-          }
-        } catch { /* fall through */ }
-      }
-
-      best = src;
-      return false;
-    });
-
-    return best;
   }
 
   private looksLikeDynamicShell(html: string): boolean {
@@ -2778,24 +2648,8 @@ export class WebRAGPlugin implements RAGPlugin {
   /**
    * Clean extracted text content
    */
-  private cleanContent(text: string): string {
-    return text
-      .replace(/\s+/g, ' ')           // Collapse whitespace
-      .replace(/\n\s*\n/g, '\n\n')    // Normalize paragraph breaks
-      .replace(/\t/g, ' ')            // Replace tabs
-      .trim();
-  }
-
-  /**
-   * Convert URL to a stable document ID
-   */
   private urlToId(url: string): string {
-    return url
-      .replace(/^https?:\/\//, '')
-      .replace(/[^a-zA-Z0-9]/g, '-')
-      .replace(/-+/g, '-')
-      .replace(/^-|-$/g, '')
-      .substring(0, 100);
+    return urlToDocumentId(url);
   }
 
   /**
