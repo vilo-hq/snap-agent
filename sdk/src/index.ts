@@ -6,6 +6,7 @@ export { AgentClient } from './core/Client';
 
 // Core Classes
 export { Agent } from './core/Agent';
+export type { AgentGenerateOptions, BuildSystemPromptFn } from './core/Agent';
 export { Thread } from './core/Thread';
 export { PluginManager } from './core/PluginManager';
 
