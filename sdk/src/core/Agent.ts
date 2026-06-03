@@ -25,6 +25,24 @@ import type {
 // Type for messages accepted by the AI SDK
 type AIMessage = UserModelMessage | AssistantModelMessage;
 
+/** Optional system prompt builder (e.g. chat security sandwich with RAG ordering). */
+export type BuildSystemPromptFn = (ctx: {
+  instructions: string;
+  ragContexts: string[];
+}) => string;
+
+export interface AgentGenerateOptions {
+  useRAG?: boolean;
+  ragFilters?: Record<string, any>;
+  threadId?: string;
+  /** Maximum number of tool-call round-trips before returning. Default: 5 */
+  maxToolSteps?: number;
+  /** When set, replaces default instructions + RAG concatenation. */
+  buildSystemPrompt?: BuildSystemPromptFn;
+  /** When true, tools are not passed to the provider. */
+  disableTools?: boolean;
+}
+
 /**
  * Helper function to extract text content from a message
  */
@@ -42,6 +60,20 @@ function extractTextContent(content: AIMessage['content']): string {
     })
     .filter(Boolean)
     .join(' ');
+}
+
+function resolveSystemPromptAndRag(
+  instructions: string,
+  ragContexts: string[],
+  buildSystemPrompt?: BuildSystemPromptFn,
+): string {
+  if (buildSystemPrompt) {
+    return buildSystemPrompt({ instructions, ragContexts });
+  }
+  if (ragContexts.length > 0) {
+    return instructions + '\n\n' + ragContexts.join('\n\n');
+  }
+  return instructions;
 }
 
 /**
@@ -219,12 +251,7 @@ export class Agent {
    */
   async generateResponse<T = unknown>(
     messages: AIMessage[],
-    options?: {
-      useRAG?: boolean;
-      ragFilters?: Record<string, any>;
-      threadId?: string;
-      /** Maximum number of tool-call round-trips before returning. Default: 5 */
-      maxToolSteps?: number;
+    options?: AgentGenerateOptions & {
       output?:
       | { mode: 'json' }                           // Flexible JSON (parsed manually)
       | { mode: 'object'; schema: Schema<T> }      // Structured object with Zod schema
@@ -252,7 +279,7 @@ export class Agent {
       threadId: options?.threadId,
     });
 
-    let systemPrompt = this.data.instructions;
+    let ragContexts: string[] = [];
     let ragMetadata: Record<string, any>[] = [];
 
     // Execute RAG plugins if enabled
@@ -267,15 +294,19 @@ export class Agent {
         }
       );
 
-      if (contexts.length > 0) {
-        systemPrompt += '\n\n' + contexts.join('\n\n');
-      }
+      ragContexts = contexts;
       ragMetadata = allMetadata;
     }
 
+    const systemPrompt = resolveSystemPromptAndRag(
+      this.data.instructions,
+      ragContexts,
+      options?.buildSystemPrompt,
+    );
+
     // Generate response
     const model = await this.providerFactory.getModel(this.data.provider, this.data.model);
-    const tools = this.pluginManager.getAISDKTools();
+    const tools = options?.disableTools ? undefined : this.pluginManager.getAISDKTools();
     // When tools are available the model may need multiple steps to resolve
     // all tool calls before producing a final text answer.
     const stopWhen = tools
@@ -362,13 +393,7 @@ export class Agent {
     onChunk: (chunk: string) => void,
     onComplete?: (fullText: string, metadata?: Record<string, any>) => void | Promise<void>,
     onError?: (error: Error) => void | Promise<void>,
-    options?: {
-      useRAG?: boolean;
-      ragFilters?: Record<string, any>;
-      threadId?: string;
-      /** Maximum number of tool-call round-trips before returning. Default: 5 */
-      maxToolSteps?: number;
-    }
+    options?: AgentGenerateOptions,
   ): Promise<void> {
     try {
       const startTime = Date.now();
@@ -389,7 +414,7 @@ export class Agent {
         threadId: options?.threadId,
       });
 
-      let systemPrompt = this.data.instructions;
+      let ragContexts: string[] = [];
       let ragMetadata: Record<string, any>[] = [];
 
       // Execute RAG plugins if enabled
@@ -404,15 +429,19 @@ export class Agent {
           }
         );
 
-        if (contexts.length > 0) {
-          systemPrompt += '\n\n' + contexts.join('\n\n');
-        }
+        ragContexts = contexts;
         ragMetadata = allMetadata;
       }
 
+      const systemPrompt = resolveSystemPromptAndRag(
+        this.data.instructions,
+        ragContexts,
+        options?.buildSystemPrompt,
+      );
+
       // Stream response
       const model = await this.providerFactory.getModel(this.data.provider, this.data.model);
-      const tools = this.pluginManager.getAISDKTools();
+      const tools = options?.disableTools ? undefined : this.pluginManager.getAISDKTools();
       const stopWhen = tools
         ? stepCountIs(options?.maxToolSteps ?? 5)
         : undefined;
