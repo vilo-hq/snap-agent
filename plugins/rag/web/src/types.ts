@@ -149,6 +149,12 @@ export interface CrawlPageStatusEntry {
   httpStatus?: number;
   error?: string;
   skippedReason?: string;
+  /**
+   * Same-origin internal links found on this page, populated only when `extractLinks` is set on
+   * the crawl config. Enables resumable recursive (BFS) crawling: the caller feeds these back into
+   * its own frontier instead of the SDK doing a separate link-discovery fetch.
+   */
+  links?: string[];
 }
 
 export interface CrawlLedgerDocument {
@@ -340,6 +346,11 @@ export interface SitemapConfig {
   debug?: DebugOptions;
 
   crawlLedger?: CrawlLedgerOptions;
+
+  /** Extract same-origin internal links per page into `pageStatuses[].links` (for caller-driven BFS). */
+  extractLinks?: boolean;
+  /** Max links kept per page when `extractLinks` is set (default: 200). */
+  maxLinksPerPage?: number;
 }
 
 /**
@@ -369,6 +380,11 @@ export interface UrlListConfig {
 
   stripQueryParams?: boolean;
   crawlLedger?: CrawlLedgerOptions;
+
+  /** Extract same-origin internal links per page into `pageStatuses[].links` (for caller-driven BFS). */
+  extractLinks?: boolean;
+  /** Max links kept per page when `extractLinks` is set (default: 200). */
+  maxLinksPerPage?: number;
 }
 
 /**
@@ -442,6 +458,11 @@ export interface WebsiteCrawlConfig {
   debug?: DebugOptions;
 
   crawlLedger?: CrawlLedgerOptions;
+
+  /** Extract same-origin internal links per page into `pageStatuses[].links` (for caller-driven BFS). */
+  extractLinks?: boolean;
+  /** Max links kept per page when `extractLinks` is set (default: 200). */
+  maxLinksPerPage?: number;
 }
 
 export interface RenderOptions {

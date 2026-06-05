@@ -1052,6 +1052,74 @@ describe('WebRAGPlugin', () => {
   // Web Crawling Tests
   // ==========================================================================
 
+  describe('extractLinks (recursive-crawl support)', () => {
+    beforeEach(() => {
+      mockFetch.mockReset();
+      mongoLedger.mockFindOne.mockResolvedValue(null);
+    });
+
+    const HUB_HTML = `<html><head><title>Hub</title></head><body>
+      <article>This hub page has more than enough text content to clear the minimum indexable threshold used by the crawler.</article>
+      <a href="https://example.com/a">A</a>
+      <a href="/b">B (relative)</a>
+      <a href="https://example.com/a#section">A again with fragment</a>
+      <a href="https://other.com/x">external</a>
+      <a href="mailto:hi@example.com">mail</a>
+      <a href="tel:+123">phone</a>
+    </body></html>`;
+
+    it('returns same-origin internal links in pageStatuses when extractLinks is set', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        headers: { get: () => 'text/html' },
+        text: async () => HUB_HTML,
+      });
+
+      const result = await plugin.ingestFromUrls(
+        ['https://example.com/'],
+        { extractLinks: true },
+        { agentId: 'agent-1' }
+      );
+
+      const links = result.metadata?.pageStatuses?.[0]?.links;
+      expect(links).toEqual(['https://example.com/a', 'https://example.com/b']);
+      // External, mailto, tel excluded; fragment deduped.
+      expect(links).not.toContain('https://other.com/x');
+    });
+
+    it('respects maxLinksPerPage', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        headers: { get: () => 'text/html' },
+        text: async () => HUB_HTML,
+      });
+
+      const result = await plugin.ingestFromUrls(
+        ['https://example.com/'],
+        { extractLinks: true, maxLinksPerPage: 1 },
+        { agentId: 'agent-1' }
+      );
+
+      expect(result.metadata?.pageStatuses?.[0]?.links).toHaveLength(1);
+    });
+
+    it('omits links when extractLinks is not set', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        headers: { get: () => 'text/html' },
+        text: async () => HUB_HTML,
+      });
+
+      const result = await plugin.ingestFromUrls(
+        ['https://example.com/'],
+        {},
+        { agentId: 'agent-1' }
+      );
+
+      expect(result.metadata?.pageStatuses?.[0]?.links).toBeUndefined();
+    });
+  });
+
   describe('ingestFromSitemap', () => {
     beforeEach(() => {
       mockFetch.mockReset();

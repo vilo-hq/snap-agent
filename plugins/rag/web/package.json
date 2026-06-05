@@ -1,6 +1,6 @@
 {
   "name": "@snap-agent/rag-web",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Web RAG plugin for SnapAgent SDK - Schema-agnostic content search via web crawling, CMS APIs, sitemaps, and RSS feeds",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
@@ -68,4 +68,3 @@
     "url": "https://github.com/vilo-hq/snap-agent/issues"
   }
 }
-

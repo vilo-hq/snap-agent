@@ -1700,6 +1700,8 @@ export class WebRAGPlugin implements RAGPlugin {
       renderOptions: config.renderOptions,
       debug: config.debug,
       crawlLedger: config.crawlLedger,
+      extractLinks: config.extractLinks,
+      maxLinksPerPage: config.maxLinksPerPage,
     }, options);
 
     return {
@@ -1913,6 +1915,27 @@ export class WebRAGPlugin implements RAGPlugin {
   }
 
   /**
+   * When `config.extractLinks` is set, parse same-origin internal links from a page's HTML so the
+   * caller can drive a resumable recursive (BFS) crawl without a separate discovery fetch. Returns
+   * undefined when disabled or on any parse error (link extraction must never fail a crawl).
+   */
+  private extractLinksIfEnabled(
+    url: string,
+    html: string,
+    config: SitemapConfig
+  ): string[] | undefined {
+    if (!config.extractLinks) return undefined;
+    try {
+      const base = new URL(url);
+      const links = this.extractInternalLinks(html, base, config.stripQueryParams ?? false);
+      const cap = config.maxLinksPerPage ?? 200;
+      return links.length > cap ? links.slice(0, cap) : links;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
    * Ingest content from a list of URLs
    * 
    * @example
@@ -1947,6 +1970,8 @@ export class WebRAGPlugin implements RAGPlugin {
       renderOptions: config.renderOptions,
       debug: config.debug,
       crawlLedger: config.crawlLedger,
+      extractLinks: config.extractLinks,
+      maxLinksPerPage: config.maxLinksPerPage,
     }, options);
   }
 
@@ -2088,7 +2113,7 @@ export class WebRAGPlugin implements RAGPlugin {
           }
 
           try {
-            const { doc, diag, bodyTextLengthHint } = await this.crawlPageSmart(url, config, timeout, {
+            const { doc, diag, bodyTextLengthHint, links } = await this.crawlPageSmart(url, config, timeout, {
               renderMode,
               renderOptions,
               minContentLength,
@@ -2125,6 +2150,7 @@ export class WebRAGPlugin implements RAGPlugin {
               title: doc?.metadata?.title,
               docId: doc?.id,
               error: diag?.errorMessage,
+              ...(links ? { links } : {}),
             });
 
             this.emitCrawlPage(config, {
@@ -2326,22 +2352,26 @@ export class WebRAGPlugin implements RAGPlugin {
     renderFailure: string | undefined,
     blockedSuspected: boolean | undefined,
     modeOk: string,
-    modeFailed: string
+    modeFailed: string,
+    links?: string[]
   ): {
     doc: RAGDocument | null;
     diag?: { modeUsed: string; reason?: string; errorMessage?: string };
     bodyTextLengthHint?: number;
+    links?: string[];
   } {
     if (blockedSuspected) {
       return {
         doc: null,
         diag: { modeUsed: modeFailed, reason: 'blocked_suspected' },
+        links,
       };
     }
     if (renderFailure) {
       return {
         doc: null,
         diag: { modeUsed: modeFailed, reason: 'render_error', errorMessage: renderFailure },
+        links,
       };
     }
     return {
@@ -2350,6 +2380,7 @@ export class WebRAGPlugin implements RAGPlugin {
         ? { modeUsed: modeOk }
         : { modeUsed: modeFailed, reason: 'too_small' },
       bodyTextLengthHint: doc ? undefined : bodyTextLengthHint,
+      links,
     };
   }
 
@@ -2367,18 +2398,19 @@ export class WebRAGPlugin implements RAGPlugin {
     doc: RAGDocument | null;
     diag?: { modeUsed: string; reason?: string; errorMessage?: string };
     bodyTextLengthHint?: number;
+    links?: string[];
   }> {
     if (ctx.renderMode === true) {
-      const { doc, bodyTextLengthHint, renderFailure, blockedSuspected } = await this.crawlPageRendered(
-        url, config, timeout, ctx.renderOptions, ctx.dbg
-      );
+      const { doc, bodyTextLengthHint, renderFailure, blockedSuspected, links } =
+        await this.crawlPageRendered(url, config, timeout, ctx.renderOptions, ctx.dbg);
       return this.diagFromRenderedAttempt(
         doc,
         bodyTextLengthHint,
         renderFailure,
         blockedSuspected,
         'render_ok',
-        'render_failed'
+        'render_failed',
+        links
       );
     }
 
@@ -2410,9 +2442,10 @@ export class WebRAGPlugin implements RAGPlugin {
       const html = await response.text();
       const doc = this.extractDocumentFromHtml(url, html, config);
       const staticHint = !doc ? this.bodyTextLengthHint(html, config) : undefined;
+      const staticLinks = this.extractLinksIfEnabled(url, html, config);
 
       if (doc && doc.content.length >= ctx.minContentLength) {
-        return { doc, diag: { modeUsed: 'static_ok' } };
+        return { doc, diag: { modeUsed: 'static_ok' }, links: staticLinks };
       }
 
       // doc is null or too small
@@ -2429,6 +2462,7 @@ export class WebRAGPlugin implements RAGPlugin {
             bodyTextLengthHint: rHint,
             renderFailure,
             blockedSuspected,
+            links: renderedLinks,
           } = await this.crawlPageRendered(
             url, config, timeout, ctx.renderOptions, ctx.dbg
           );
@@ -2439,7 +2473,9 @@ export class WebRAGPlugin implements RAGPlugin {
             renderFailure,
             blockedSuspected,
             'render_fallback_ok',
-            'render_fallback_failed'
+            'render_fallback_failed',
+            // Prefer links from the rendered DOM; fall back to the static HTML's links.
+            renderedLinks ?? staticLinks
           );
           if (!rendered && (renderFailure || blockedSuspected)) {
             fb.bodyTextLengthHint = staticHint ?? rHint;
@@ -2452,6 +2488,7 @@ export class WebRAGPlugin implements RAGPlugin {
         doc: null,
         diag: { modeUsed: 'static_failed', reason: 'too_small' },
         bodyTextLengthHint: staticHint,
+        links: staticLinks,
       };
     } catch (e) {
       // Network/timeouts/etc.
@@ -2470,6 +2507,7 @@ export class WebRAGPlugin implements RAGPlugin {
     bodyTextLengthHint: number;
     renderFailure?: string;
     blockedSuspected?: boolean;
+    links?: string[];
   }> {
     let playwright: any;
     try {
@@ -2519,6 +2557,8 @@ export class WebRAGPlugin implements RAGPlugin {
       const html = await page.content();
       const bodyTextLengthHint = this.bodyTextLengthHint(html, config);
       const doc = this.extractDocumentFromHtml(url, html, config);
+      // Links from the rendered DOM include JS-injected anchors a static fetch would miss.
+      const links = this.extractLinksIfEnabled(url, html, config);
 
       if (config.debug?.saveDir && config.debug?.enabled) {
         try {
@@ -2534,7 +2574,7 @@ export class WebRAGPlugin implements RAGPlugin {
         }
       }
 
-      return { doc, bodyTextLengthHint };
+      return { doc, bodyTextLengthHint, links };
     } catch (e: any) {
       const msg = String(e?.message || e || 'render_failed');
       const lower = msg.toLowerCase();
