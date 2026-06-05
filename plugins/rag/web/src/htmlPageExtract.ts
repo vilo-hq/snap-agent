@@ -1,5 +1,6 @@
 import * as cheerio from 'cheerio';
 import { extractProductMetadata } from './productMetadata';
+import { resolvePageCardMetadata } from './pageCardMetadata';
 
 const DEFAULT_CONTENT_SELECTOR =
   'article, main, [role="main"], #content, #primary, #main, .content, .post-content, ' +
@@ -66,10 +67,16 @@ export function extractPageFromHtml(
   const $ = cheerio.load(html);
   stripNoiseFromDom($, options);
 
-  const titleSelector = options.titleSelector || 'h1, title';
-  let title = $(titleSelector).first().text().trim();
+  const h1Title = $('h1').first().text().trim();
+  const docTitle = $('title').text().trim();
+  let title = '';
+  if (options.titleSelector) {
+    title = $(options.titleSelector).first().text().trim();
+  } else {
+    title = docTitle || h1Title;
+  }
   if (!title) {
-    title = $('title').text().trim();
+    title = h1Title || docTitle;
   }
 
   const content = extractBestContentText($, options);
@@ -111,12 +118,28 @@ export function extractPageFromHtml(
 
   const productMeta = extractProductMetadata(html);
 
-  const metadata: Record<string, unknown> = {
+  const cardMeta = resolvePageCardMetadata({
+    url,
+    title,
+    headingTitle: h1Title || undefined,
+    description,
+    imageUrl,
+    html,
     type,
+    hasProductPrice: productMeta.price != null,
+  });
+
+  const metadata: Record<string, unknown> = {
+    type: cardMeta.type,
+    cardEligible: cardMeta.cardEligible,
+    cardPriority: cardMeta.cardPriority,
     ...(title ? { title } : {}),
+    ...(cardMeta.displayTitle ? { displayTitle: cardMeta.displayTitle } : {}),
     url,
     ...(imageUrl ? { imageUrl } : {}),
+    ...(cardMeta.displayImageUrl ? { displayImageUrl: cardMeta.displayImageUrl } : {}),
     ...(description ? { description } : {}),
+    ...(cardMeta.displayDescription ? { displayDescription: cardMeta.displayDescription } : {}),
     ...(productMeta.price != null ? { price: productMeta.price } : {}),
     ...(productMeta.currency ? { currency: productMeta.currency } : {}),
     ...(productMeta.availability ? { availability: productMeta.availability } : {}),
