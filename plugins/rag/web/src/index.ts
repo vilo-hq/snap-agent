@@ -7,6 +7,13 @@ export {
 export type { HtmlPageExtractOptions, HtmlPageExtractResult } from './htmlPageExtract';
 export { extractProductMetadata, parsePrice, normalizeCurrency, normalizeAvailability } from './productMetadata';
 export type { ProductMetadata } from './productMetadata';
+export {
+  resolvePageCardMetadata,
+  hardExcludePage,
+  inferTypeFromUrl,
+  normalizeDisplayTitle,
+} from './pageCardMetadata';
+export type { PageCardMetadataInput, PageCardMetadataResult, PageCardType } from './pageCardMetadata';
 export type {
   WebRAGConfig,
   WebDocument,

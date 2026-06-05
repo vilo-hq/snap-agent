@@ -20,8 +20,10 @@ describe('extractPageFromHtml', () => {
 
     expect(result.indexable).toBe(true);
     expect(result.metadata).toMatchObject({
-      type: 'product',
+      type: 'detail',
+      cardEligible: true,
       title: 'Shop | Widget',
+      displayTitle: 'Widget',
       url: 'https://shop.example.com/product/widget',
       description: 'A great widget.',
       imageUrl: 'https://cdn.example.com/w.jpg',
