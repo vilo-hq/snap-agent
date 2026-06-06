@@ -8,10 +8,29 @@ const DEFAULT_CONTENT_SELECTOR =
   '.wp-block-group, .site-content, .ast-single-post, .ast-page';
 
 const DEFAULT_REMOVE_SELECTORS = [
-  'script', 'style', 'nav', 'header', 'footer',
+  // Non-content elements (scripts, styles, embeds, interactive widgets)
+  'script', 'style', 'noscript', 'svg', 'iframe', 'form', 'button',
+  // Semantic page chrome
+  'nav', 'header', 'footer', 'aside',
+  '[role="navigation"]', '[role="banner"]', '[role="contentinfo"]',
+  '[role="search"]', '[role="complementary"]', '[aria-hidden="true"]',
+  // Class/id-based chrome on modern (esp. e-commerce) sites that don't use semantic tags.
+  // `i` = case-insensitive substring match. Deliberately omits a blanket `[class*="header"]`,
+  // which would also strip in-content section headers (e.g. product-card titles).
   '.sidebar', '.navigation', '.menu', '.comments',
-  '[role="navigation"]', '[role="banner"]',
+  '[class*="cookie" i]', '[id*="cookie" i]', '[class*="consent" i]', '[class*="gdpr" i]',
+  '[class*="breadcrumb" i]', '[class*="newsletter" i]',
+  '[class*="related" i]', '[class*="recommend" i]', '[class*="upsell" i]',
+  '[class*="cross-sell" i]', '[class*="crosssell" i]',
+  '[class*="carousel" i]', '[class*="slider" i]',
+  '[class*="navbar" i]', '[class*="mega-menu" i]',
+  '[class*="site-footer" i]', '[class*="page-footer" i]', '[id*="footer" i]',
 ];
+
+/** Link-dense blocks (nav remnants, footers, "related products" grids) are boilerplate, not prose. */
+const LINK_DENSITY_THRESHOLD = 0.5;
+const LINK_DENSITY_MIN_LINKS = 3;
+const LINK_DENSITY_MIN_TEXT = 40;
 
 export interface HtmlPageExtractOptions {
   titleSelector?: string;
@@ -167,16 +186,52 @@ function stripNoiseFromDom($: cheerio.CheerioAPI, options: HtmlPageExtractOption
 function extractBestContentText($: cheerio.CheerioAPI, options: HtmlPageExtractOptions): string {
   const contentSelector = options.contentSelector || DEFAULT_CONTENT_SELECTOR;
   const selectors = contentSelector.split(',').map(s => s.trim()).filter(Boolean);
-  let best = '';
+
+  // Pick the largest matching container by text length — and keep the element, so we can prune
+  // boilerplate inside it before serializing.
+  let bestEl: cheerio.Cheerio<any> | null = null;
+  let bestLen = 0;
   for (const sel of selectors) {
     $(sel).each((_, el) => {
-      const t = cleanContent($(el).text().trim());
-      if (t.length > best.length) best = t;
+      const node = $(el);
+      const t = cleanContent(node.text()).length;
+      if (t > bestLen) {
+        bestLen = t;
+        bestEl = node;
+      }
     });
   }
-  const bodyText = cleanContent($('body').text().trim());
-  if (bodyText.length > best.length) best = bodyText;
-  return best;
+
+  // Only fall back to <body> when NO content container matched. Previously the body was used
+  // whenever it had more text than the best match — which is almost always true on real sites,
+  // so the whole header/footer/nav got ingested and contentSelector was effectively ignored.
+  const scope: cheerio.Cheerio<any> = bestEl ?? $('body');
+
+  pruneLinkDenseBlocks($, scope);
+
+  return cleanContent(scope.text().trim());
+}
+
+/**
+ * Remove descendant blocks that are mostly links (nav menus, footers, "related products" grids).
+ * Generic boilerplate removal that needs no per-site selectors: real prose has low link density.
+ * Never removes `scope` itself, so a pure link-grid page simply ends up empty (→ not indexable).
+ */
+function pruneLinkDenseBlocks($: cheerio.CheerioAPI, scope: cheerio.Cheerio<any>): void {
+  const toRemove: any[] = [];
+  scope.find('ul, ol, nav, header, footer, aside, section, div').each((_, el) => {
+    const node = $(el);
+    const links = node.find('a');
+    if (links.length < LINK_DENSITY_MIN_LINKS) return;
+    const total = cleanContent(node.text()).length;
+    if (total < LINK_DENSITY_MIN_TEXT) return;
+    let linkLen = 0;
+    links.each((_, a) => {
+      linkLen += cleanContent($(a).text()).length;
+    });
+    if (linkLen / Math.max(total, 1) > LINK_DENSITY_THRESHOLD) toRemove.push(el);
+  });
+  toRemove.forEach((el) => $(el).remove());
 }
 
 function extractHeroImage($: cheerio.CheerioAPI, pageUrl: string): string | undefined {

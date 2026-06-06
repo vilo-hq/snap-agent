@@ -46,4 +46,36 @@ describe('extractPageFromHtml', () => {
     expect(result.metadata.price).toBe(99);
     expect(result.metadata.currency).toBe('EUR');
   });
+
+  it('keeps the content container and ignores out-of-container boilerplate even when body is longer', () => {
+    const main = `<main><h1>Product</h1><p>${'Real product description long enough to index. '.repeat(2)}</p></main>`;
+    const junk = `<div class="extra">${'BOILERPLATE '.repeat(50)}</div>`;
+    const html = `<!DOCTYPE html><html><body>${main}${junk}</body></html>`;
+
+    const result = extractPageFromHtml('https://shop.example.com/p', html);
+    expect(result.content).toContain('Real product description');
+    expect(result.content).not.toContain('BOILERPLATE');
+  });
+
+  it('prunes link-dense boilerplate blocks inside the content container', () => {
+    const html = `<!DOCTYPE html><html><body><main>
+      <p>This is the genuine article body text and it is definitely long enough to be indexed.</p>
+      <div class="block">
+        <a href="/a">Related product alpha</a>
+        <a href="/b">Related product beta</a>
+        <a href="/c">Related product gamma</a>
+      </div>
+    </main></body></html>`;
+
+    const result = extractPageFromHtml('https://shop.example.com/p', html);
+    expect(result.content).toContain('genuine article body text');
+    expect(result.content).not.toContain('Related product');
+  });
+
+  it('falls back to <body> when no content container matches', () => {
+    const html = `<!DOCTYPE html><html><body><h1>Title</h1><p>${'Plain body prose long enough to index. '.repeat(2)}</p></body></html>`;
+    const result = extractPageFromHtml('https://example.com/p', html);
+    expect(result.indexable).toBe(true);
+    expect(result.content).toContain('Plain body prose');
+  });
 });
