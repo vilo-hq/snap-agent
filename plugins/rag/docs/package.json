@@ -1,6 +1,6 @@
 {
   "name": "@snap-agent/rag-docs",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Documentation RAG plugin for SnapAgent SDK - Semantic search over markdown, code, and technical documentation",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
