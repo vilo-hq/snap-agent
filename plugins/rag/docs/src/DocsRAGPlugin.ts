@@ -639,6 +639,18 @@ export class DocsRAGPlugin implements RAGPlugin {
         continue;
       }
 
+      // Check for record separator (---) — flush without including the separator
+      if (/^-{3,}$/.test(line.trim()) && !inCodeBlock) {
+        if (currentChunk.trim()) {
+          chunks.push({
+            content: currentChunk.trim(),
+            metadata: { type: 'text', section: currentSection },
+          });
+          currentChunk = '';
+        }
+        continue;
+      }
+
       // Check for headings
       const headingMatch = line.match(/^(#{1,6})\s+(.+)$/);
       if (headingMatch && !inCodeBlock) {
