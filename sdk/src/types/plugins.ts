@@ -427,6 +427,8 @@ export interface RequestTrackingData {
   threadId?: string;
   userId?: string;
   organizationId?: string;
+  /** Links the request/response/error records of a single agent turn. */
+  correlationId?: string;
   message: string;
   messageLength: number;
   timestamp: Date;
@@ -442,6 +444,8 @@ export interface ResponseTrackingData {
   threadId?: string;
   userId?: string;
   organizationId?: string;
+  /** Links the request/response/error records of a single agent turn. */
+  correlationId?: string;
   response: string;
   responseLength: number;
   timestamp: Date;
@@ -460,6 +464,19 @@ export interface ResponseTrackingData {
   errorType?: string;
   errorMessage?: string;
 
+  // Explicit outcome for System Logs. When omitted it's derived from `success`
+  // (success | error). Set to 'blocked' for short-circuited requests (e.g. a
+  // moderation block) that never reached the LLM, so they don't read as a success.
+  status?: 'success' | 'error' | 'blocked';
+
+  // Severity classification for System Logs.
+  // When omitted, the analytics plugin derives it (info | warning) from timings/RAG.
+  level?: 'info' | 'warning' | 'error';
+  warningReasons?: string[];
+
+  // Which subsystem produced this record (defaults to 'llm').
+  component?: 'llm' | 'rag' | 'plugin' | 'database' | 'network' | 'moderation';
+
   // Model info
   model?: string;
   provider?: string;
@@ -471,6 +488,9 @@ export interface ResponseTrackingData {
 export interface ErrorTrackingData {
   agentId: string;
   threadId?: string;
+  userId?: string;
+  /** Links the request/response/error records of a single agent turn. */
+  correlationId?: string;
   timestamp: Date;
   errorType: string;
   errorMessage: string;
@@ -488,6 +508,8 @@ export interface AnalyticsPlugin extends BasePlugin {
   trackRequest(data: {
     agentId: string;
     threadId?: string;
+    userId?: string;
+    correlationId?: string;
     message: string;
     timestamp: Date;
   }): Promise<void>;

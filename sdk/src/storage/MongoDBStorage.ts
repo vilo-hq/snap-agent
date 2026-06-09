@@ -279,7 +279,8 @@ export class MongoDBStorage implements StorageAdapter {
     threadId: string,
     role: MessageRole,
     content: string,
-    attachments?: MessageAttachment[]
+    attachments?: MessageAttachment[],
+    metadata?: Record<string, any>
   ): Promise<string> {
     const db = await this.ensureConnection();
     const collection: Collection<ThreadDocument> = db.collection(
@@ -293,6 +294,7 @@ export class MongoDBStorage implements StorageAdapter {
       content,
       timestamp: new Date(),
       attachments,
+      ...(metadata && { metadata }),
     };
 
     await collection.updateOne(

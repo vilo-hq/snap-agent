@@ -145,7 +145,8 @@ export class MemoryStorage implements StorageAdapter {
     threadId: string,
     role: MessageRole,
     content: string,
-    attachments?: MessageAttachment[]
+    attachments?: MessageAttachment[],
+    metadata?: Record<string, any>
   ): Promise<string> {
     const thread = this.threads.get(threadId);
     if (!thread) {
@@ -159,6 +160,7 @@ export class MemoryStorage implements StorageAdapter {
       content,
       timestamp: new Date(),
       attachments,
+      ...(metadata && { metadata }),
     };
 
     thread.messages.push(message);
