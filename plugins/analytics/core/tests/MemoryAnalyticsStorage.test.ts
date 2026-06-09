@@ -22,7 +22,6 @@ describe('MemoryAnalyticsStorage', () => {
 
   const createResponse = (id: string, agentId = 'agent-1'): StoredResponse => ({
     id,
-    requestId: `req-${id}`,
     agentId,
     threadId: 'thread-1',
     userId: 'user-1',
@@ -248,6 +247,44 @@ describe('MemoryAnalyticsStorage', () => {
       expect(await storage.getRequestCount()).toBe(0);
       expect(await storage.getResponseCount()).toBe(0);
       expect(await storage.getErrorCount()).toBe(0);
+    });
+  });
+
+  // ==========================================================================
+  // System Logs (cursor pagination)
+  // ==========================================================================
+
+  describe('getSystemLogs cursor pagination', () => {
+    it('paginates without losing records that share a timestamp', async () => {
+      // Six responses on the exact same millisecond: a naive `timestamp < cursor`
+      // cursor would drop every record sharing the boundary instant.
+      const ts = new Date('2024-06-01T00:00:00.000Z');
+      await storage.saveResponses(
+        Array.from({ length: 6 }, (_, i) => ({
+          ...createResponse(`res-${i + 1}`),
+          timestamp: ts,
+        })),
+      );
+
+      const seen = new Set<string>();
+      let cursor = undefined as undefined | { timestamp: string; id: string };
+      for (let page = 0; page < 5; page++) {
+        const result = await storage.getSystemLogs({ limit: 2, cursor });
+        for (const log of result.logs) seen.add(log.id);
+        if (!result.nextCursor) break;
+        cursor = result.nextCursor;
+      }
+
+      expect(seen.size).toBe(6);
+    });
+
+    it('carries correlationId through to the system-log entry', async () => {
+      await storage.saveResponses([
+        { ...createResponse('res-1'), correlationId: 'turn-abc' },
+      ]);
+
+      const { logs } = await storage.getSystemLogs({});
+      expect(logs[0].correlationId).toBe('turn-abc');
     });
   });
 

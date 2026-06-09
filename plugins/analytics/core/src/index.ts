@@ -26,6 +26,11 @@ export type {
   AnalyticsQueryOptions,
   AggregationOptions,
   MongoAnalyticsStorageConfig,
+  SystemLogLevel,
+  SystemLogCursor,
+  SystemLogFilter,
+  SystemLogEntry,
+  SystemLogPage,
 } from './storage';
 
 // Re-export types from core for convenience

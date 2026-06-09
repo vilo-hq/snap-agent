@@ -1,6 +1,6 @@
 {
   "name": "@snap-agent/analytics",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Comprehensive analytics plugin for SnapAgent SDK - Performance, RAG, Cost, Conversation, and Error metrics",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
@@ -42,7 +42,7 @@
     "access": "public"
   },
   "peerDependencies": {
-    "@snap-agent/core": "^0.1.0",
+    "@snap-agent/core": "^0.2.7",
     "mongodb": "^6.0.0 || ^7.0.0"
   },
   "peerDependenciesMeta": {
