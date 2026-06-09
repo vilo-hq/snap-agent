@@ -83,13 +83,15 @@ export class Thread {
   async addMessage(
     role: MessageRole,
     content: string,
-    attachments?: MessageAttachment[]
+    attachments?: MessageAttachment[],
+    metadata?: Record<string, any>
   ): Promise<string> {
     const messageId = await this.storage.addMessage(
       this.data.id,
       role,
       content,
-      attachments
+      attachments,
+      metadata
     );
 
     // Reload data to include new message

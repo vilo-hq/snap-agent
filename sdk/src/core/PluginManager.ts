@@ -5,6 +5,9 @@ import type {
   ToolPlugin,
   MiddlewarePlugin,
   AnalyticsPlugin,
+  RequestTrackingData,
+  ResponseTrackingData,
+  ErrorTrackingData,
 } from '../types/plugins';
 import { convertToolPlugins } from './toolUtils';
 
@@ -179,6 +182,8 @@ export class PluginManager {
   async trackRequest(data: {
     agentId: string;
     threadId?: string;
+    userId?: string;
+    correlationId?: string;
     message: string;
     timestamp: Date;
   }): Promise<void> {
@@ -214,6 +219,57 @@ export class PluginManager {
           await plugin.trackResponse(data);
         } catch (error) {
           console.error(`Analytics plugin "${plugin.name}" trackResponse failed:`, error);
+        }
+      })
+    );
+  }
+
+  /**
+   * Track request (extended) in all analytics plugins that support it
+   */
+  async trackRequestExtended(data: RequestTrackingData): Promise<void> {
+    const analyticsPlugins = this.getAnalyticsPlugins();
+
+    await Promise.all(
+      analyticsPlugins.map(async (plugin) => {
+        try {
+          await plugin.trackRequestExtended?.(data);
+        } catch (error) {
+          console.error(`Analytics plugin "${plugin.name}" trackRequestExtended failed:`, error);
+        }
+      })
+    );
+  }
+
+  /**
+   * Track response (extended) in all analytics plugins that support it
+   */
+  async trackResponseExtended(data: ResponseTrackingData): Promise<void> {
+    const analyticsPlugins = this.getAnalyticsPlugins();
+
+    await Promise.all(
+      analyticsPlugins.map(async (plugin) => {
+        try {
+          await plugin.trackResponseExtended?.(data);
+        } catch (error) {
+          console.error(`Analytics plugin "${plugin.name}" trackResponseExtended failed:`, error);
+        }
+      })
+    );
+  }
+
+  /**
+   * Track an error in all analytics plugins that support it
+   */
+  async trackError(data: ErrorTrackingData): Promise<void> {
+    const analyticsPlugins = this.getAnalyticsPlugins();
+
+    await Promise.all(
+      analyticsPlugins.map(async (plugin) => {
+        try {
+          await plugin.trackError?.(data);
+        } catch (error) {
+          console.error(`Analytics plugin "${plugin.name}" trackError failed:`, error);
         }
       })
     );

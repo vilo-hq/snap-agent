@@ -13,6 +13,8 @@ import type {
   StoredRequest,
   StoredResponse,
   StoredError,
+  SystemLogFilter,
+  SystemLogPage,
 } from './storage';
 import { MemoryAnalyticsStorage } from './storage';
 
@@ -68,6 +70,23 @@ export interface AnalyticsConfig {
    * @default 30
    */
   retentionDays?: number;
+
+  /**
+   * Responses slower than this (ms) are classified as `warning` in System Logs.
+   * @default 10000
+   */
+  warningLatencyMs?: number;
+
+  /**
+   * Hard cap on events kept in the in-memory cache, per category (requests,
+   * responses, errors). When exceeded, the oldest are dropped. This bounds RAM
+   * in long-running processes (e.g. a server singleton): the persistent
+   * `storage` still keeps the full `retentionDays` window, and this only limits
+   * the in-memory cache used by the `getMetrics`/aggregation helpers.
+   * 0 disables the cap.
+   * @default 10000
+   */
+  maxInMemoryEvents?: number;
 
   /**
    * Flush interval in ms (for batched writes)
@@ -370,6 +389,8 @@ export class SnapAgentAnalytics implements AnalyticsPlugin {
       modelCosts: { ...DEFAULT_MODEL_COSTS, ...config.modelCosts },
       embeddingCost: config.embeddingCost ?? 0.0001,
       retentionDays: config.retentionDays ?? 30,
+      warningLatencyMs: config.warningLatencyMs ?? 10000,
+      maxInMemoryEvents: config.maxInMemoryEvents ?? 10000,
       flushInterval: config.flushInterval ?? 5000,
       onMetric: config.onMetric || (() => { }),
       storage: config.storage,
@@ -399,12 +420,16 @@ export class SnapAgentAnalytics implements AnalyticsPlugin {
   async trackRequest(data: {
     agentId: string;
     threadId?: string;
+    userId?: string;
+    correlationId?: string;
     message: string;
     timestamp: Date;
   }): Promise<void> {
     await this.trackRequestExtended({
       agentId: data.agentId,
       threadId: data.threadId,
+      userId: data.userId,
+      correlationId: data.correlationId,
       message: data.message,
       messageLength: data.message.length,
       timestamp: data.timestamp,
@@ -447,10 +472,13 @@ export class SnapAgentAnalytics implements AnalyticsPlugin {
    */
   async trackRequestExtended(data: RequestTrackingData): Promise<void> {
     const request: StoredRequest = {
-      id: `req-${++this.idCounter}`,
+      // Derive a globally-unique id from the turn's correlationId so it survives
+      // process restarts; fall back to the in-process counter when absent.
+      id: `req-${data.correlationId ?? ++this.idCounter}`,
       agentId: data.agentId,
       threadId: data.threadId,
       userId: data.userId,
+      correlationId: data.correlationId,
       timestamp: data.timestamp,
       messageLength: data.messageLength,
       model: data.model,
@@ -459,6 +487,7 @@ export class SnapAgentAnalytics implements AnalyticsPlugin {
 
     this.requests.push(request);
     this.pendingRequests.push(request);
+    this.capInMemory();
 
     // Update conversation stats
     if (this.config.enableConversation && data.threadId) {
@@ -493,12 +522,25 @@ export class SnapAgentAnalytics implements AnalyticsPlugin {
       );
     }
 
+    // Derive severity level for System Logs when the caller didn't set one.
+    const warningReasons = [...(data.warningReasons ?? [])];
+    if (data.success) {
+      if (data.timings.total > this.config.warningLatencyMs && !warningReasons.includes('high_latency')) {
+        warningReasons.push('high_latency');
+      }
+      if (data.rag?.enabled && (data.rag.documentsRetrieved ?? 0) === 0 && !warningReasons.includes('rag_empty')) {
+        warningReasons.push('rag_empty');
+      }
+    }
+    const level: 'info' | 'warning' | 'error' =
+      data.level ?? (!data.success ? 'error' : warningReasons.length > 0 ? 'warning' : 'info');
+
     const response: StoredResponse = {
-      id: `res-${++this.idCounter}`,
-      requestId: `req-${this.idCounter}`,
+      id: `res-${data.correlationId ?? ++this.idCounter}`,
       agentId: data.agentId,
       threadId: data.threadId,
       userId: data.userId,
+      correlationId: data.correlationId,
       timestamp: data.timestamp,
       responseLength: data.responseLength,
       timings: data.timings,
@@ -509,12 +551,17 @@ export class SnapAgentAnalytics implements AnalyticsPlugin {
       rag: data.rag,
       success: data.success,
       errorType: data.errorType,
+      ...(data.status && { status: data.status }),
+      level,
+      ...(warningReasons.length > 0 && { warningReasons }),
+      component: data.component ?? 'llm',
       model: data.model,
       provider: data.provider,
     };
 
     this.responses.push(response);
     this.pendingResponses.push(response);
+    this.capInMemory();
 
     // Update conversation stats
     if (this.config.enableConversation && data.threadId) {
@@ -526,6 +573,8 @@ export class SnapAgentAnalytics implements AnalyticsPlugin {
       await this.trackError({
         agentId: data.agentId,
         threadId: data.threadId,
+        userId: data.userId,
+        correlationId: data.correlationId,
         timestamp: data.timestamp,
         errorType: data.errorType,
         errorMessage: data.errorMessage || 'Unknown error',
@@ -548,9 +597,11 @@ export class SnapAgentAnalytics implements AnalyticsPlugin {
     if (!this.config.enableErrors) return;
 
     const error: StoredError = {
-      id: `err-${++this.idCounter}`,
+      id: `err-${data.correlationId ?? ++this.idCounter}`,
       agentId: data.agentId,
       threadId: data.threadId,
+      userId: data.userId,
+      correlationId: data.correlationId,
       timestamp: data.timestamp,
       errorType: data.errorType,
       errorMessage: data.errorMessage,
@@ -559,6 +610,7 @@ export class SnapAgentAnalytics implements AnalyticsPlugin {
 
     this.errors.push(error);
     this.pendingErrors.push(error);
+    this.capInMemory();
 
     // Emit event
     this.config.onMetric({
@@ -1028,6 +1080,15 @@ export class SnapAgentAnalytics implements AnalyticsPlugin {
     this.userSessions.set(userId, sessions);
   }
 
+  /** Drop the oldest in-memory events beyond the configured cap (RAM safety). */
+  private capInMemory(): void {
+    const cap = this.config.maxInMemoryEvents;
+    if (cap <= 0) return;
+    if (this.requests.length > cap) this.requests.splice(0, this.requests.length - cap);
+    if (this.responses.length > cap) this.responses.splice(0, this.responses.length - cap);
+    if (this.errors.length > cap) this.errors.splice(0, this.errors.length - cap);
+  }
+
   private filterResponses(
     agentId?: string,
     startDate?: Date,
@@ -1112,6 +1173,16 @@ export class SnapAgentAnalytics implements AnalyticsPlugin {
     for (const [threadId, stats] of this.threadStats.entries()) {
       if (stats.lastMessage < cutoff) {
         this.threadStats.delete(threadId);
+      }
+    }
+
+    // Trim user session history (otherwise it grows unbounded forever).
+    for (const [userId, sessions] of this.userSessions.entries()) {
+      const recent = sessions.filter((ts) => ts > cutoff);
+      if (recent.length === 0) {
+        this.userSessions.delete(userId);
+      } else if (recent.length !== sessions.length) {
+        this.userSessions.set(userId, recent);
       }
     }
 
@@ -1304,13 +1375,35 @@ export class SnapAgentAnalytics implements AnalyticsPlugin {
       this.pendingResponses = [];
       this.pendingErrors = [];
 
-      // Save to storage adapter
+      // Save to storage adapter. Re-queue any category whose write fails so a
+      // transient storage outage doesn't silently drop the batch — it retries
+      // on the next flush. Only the failed category is re-queued (no duplicates).
       if (this.config.storage) {
-        await Promise.all([
+        const [reqResult, respResult, errResult] = await Promise.allSettled([
           this.storage.saveRequests(flushData.requests),
           this.storage.saveResponses(flushData.responses),
           this.storage.saveErrors(flushData.errors),
         ]);
+
+        const failures: unknown[] = [];
+        if (reqResult.status === 'rejected') {
+          this.pendingRequests = [...flushData.requests, ...this.pendingRequests];
+          failures.push(reqResult.reason);
+        }
+        if (respResult.status === 'rejected') {
+          this.pendingResponses = [...flushData.responses, ...this.pendingResponses];
+          failures.push(respResult.reason);
+        }
+        if (errResult.status === 'rejected') {
+          this.pendingErrors = [...flushData.errors, ...this.pendingErrors];
+          failures.push(errResult.reason);
+        }
+
+        // Surface the failure (the flush timer's `.catch` logs it) after the
+        // batch has been safely re-queued.
+        if (failures.length > 0) {
+          throw failures[0];
+        }
       }
 
     } finally {
@@ -1326,6 +1419,16 @@ export class SnapAgentAnalytics implements AnalyticsPlugin {
     this.stopFlushTimer();
     await this.flush();
     await this.storage.close();
+  }
+
+  /**
+   * Get a unified, reverse-chronological feed of system logs
+   * (responses as info/warning + errors as error) with cursor pagination.
+   * Pending data is flushed first so the most recent records are included.
+   */
+  async getSystemLogs(filter: SystemLogFilter = {}): Promise<SystemLogPage> {
+    await this.flush();
+    return this.storage.getSystemLogs(filter);
   }
 
   /**

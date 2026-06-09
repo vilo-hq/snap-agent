@@ -6,6 +6,15 @@ import type {
   StoredError,
   AnalyticsQueryOptions,
   AggregationOptions,
+  SystemLogFilter,
+  SystemLogPage,
+  SystemLogEntry,
+} from './AnalyticsStorage';
+import {
+  responseToSystemLog,
+  errorToSystemLog,
+  mergeSystemLogs,
+  isBeforeCursor,
 } from './AnalyticsStorage';
 
 export interface MongoAnalyticsStorageConfig {
@@ -31,6 +40,13 @@ export interface MongoAnalyticsStorageConfig {
    * @default true
    */
   createIndexes?: boolean;
+
+  /**
+   * Auto-expire records older than this many days via a TTL index.
+   * 0 disables automatic expiration.
+   * @default 0
+   */
+  retentionDays?: number;
 }
 
 /**
@@ -53,6 +69,7 @@ export class MongoAnalyticsStorage implements AnalyticsStorage {
       database: config.database || 'snap-agent-analytics',
       collectionPrefix: config.collectionPrefix || 'analytics',
       createIndexes: config.createIndexes !== false,
+      retentionDays: config.retentionDays ?? 0,
     };
   }
 
@@ -118,6 +135,16 @@ export class MongoAnalyticsStorage implements AnalyticsStorage {
       { key: { errorType: 1, timestamp: -1 } },
       { key: { timestamp: -1 } },
     ]);
+
+    // TTL indexes for automatic retention
+    if (this.config.retentionDays > 0) {
+      const expireAfterSeconds = this.config.retentionDays * 24 * 60 * 60;
+      await Promise.all([
+        this.requestsCollection.createIndex({ timestamp: 1 }, { expireAfterSeconds }),
+        this.responsesCollection.createIndex({ timestamp: 1 }, { expireAfterSeconds }),
+        this.errorsCollection.createIndex({ timestamp: 1 }, { expireAfterSeconds }),
+      ]);
+    }
   }
 
   async saveRequests(requests: StoredRequest[]): Promise<void> {
@@ -199,6 +226,71 @@ export class MongoAnalyticsStorage implements AnalyticsStorage {
     await this.ensureConnection();
     const query = this.buildQuery(options);
     return this.errorsCollection!.countDocuments(query);
+  }
+
+  async getSystemLogs(filter: SystemLogFilter = {}): Promise<SystemLogPage> {
+    await this.ensureConnection();
+    const limit = filter.limit ?? 50;
+
+    // The cursor is an inclusive upper bound on timestamp; records sharing the
+    // cursor's millisecond are kept by the query and discarded afterwards by
+    // (timestamp, seq) so no record is lost when several share a timestamp.
+    const cursor = filter.cursor;
+    const upper = cursor ? new Date(cursor.timestamp) : filter.to;
+
+    const timeQuery: Record<string, any> = {};
+    if (filter.from) timeQuery.$gte = filter.from;
+    if (upper) timeQuery.$lte = upper;
+
+    const common: Record<string, any> = {};
+    if (filter.agentId) common.agentId = filter.agentId;
+    if (Object.keys(timeQuery).length > 0) common.timestamp = timeQuery;
+
+    const afterCursor = (entry: SystemLogEntry): boolean =>
+      !cursor || isBeforeCursor(entry.timestamp, entry.id, cursor);
+
+    const wantErrors = !filter.level || filter.level === 'error';
+    const wantResponses = !filter.level || filter.level === 'warning' || filter.level === 'info';
+
+    const tasks: Promise<SystemLogEntry[]>[] = [];
+
+    if (wantResponses) {
+      const respQuery: Record<string, any> = { ...common, success: true };
+      if (filter.level === 'warning') {
+        respQuery.level = 'warning';
+      } else if (filter.level === 'info') {
+        respQuery.$or = [{ level: 'info' }, { level: { $exists: false } }, { level: null }];
+      }
+      tasks.push(
+        this.responsesCollection!
+          .find(respQuery)
+          .sort({ timestamp: -1 })
+          .limit(limit + 1)
+          .toArray()
+          .then((rows) =>
+            rows
+              .map(responseToSystemLog)
+              .filter((e) => !filter.component || (e.component ?? 'llm') === filter.component)
+              .filter(afterCursor),
+          ),
+      );
+    }
+
+    if (wantErrors) {
+      const errQuery: Record<string, any> = { ...common };
+      if (filter.component) errQuery.component = filter.component;
+      tasks.push(
+        this.errorsCollection!
+          .find(errQuery)
+          .sort({ timestamp: -1 })
+          .limit(limit + 1)
+          .toArray()
+          .then((rows) => rows.map(errorToSystemLog).filter(afterCursor)),
+      );
+    }
+
+    const entries = (await Promise.all(tasks)).flat();
+    return mergeSystemLogs(entries, limit);
   }
 
   async deleteOlderThan(date: Date): Promise<{ requests: number; responses: number; errors: number }> {

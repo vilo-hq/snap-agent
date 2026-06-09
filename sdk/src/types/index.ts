@@ -191,7 +191,8 @@ export interface StorageAdapter {
     threadId: string,
     role: MessageRole,
     content: string,
-    attachments?: MessageAttachment[]
+    attachments?: MessageAttachment[],
+    metadata?: Record<string, any>
   ): Promise<string>;
   getMessages(threadId: string, limit?: number): Promise<MessageData[]>;
   getConversationContext(threadId: string, maxMessages?: number): Promise<Array<{ role: string; content: string }>>;

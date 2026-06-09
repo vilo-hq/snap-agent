@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { generateText, streamText, Output, stepCountIs } from 'ai';
 import type { UserModelMessage, AssistantModelMessage, Schema } from 'ai';
 import { ProviderFactory } from '../providers';
@@ -21,6 +22,7 @@ import type {
   URLSource,
   URLIngestResult,
 } from '../types';
+import type { TokenMetrics, RAGMetrics } from '../types/plugins';
 
 // Type for messages accepted by the AI SDK
 type AIMessage = UserModelMessage | AssistantModelMessage;
@@ -35,12 +37,21 @@ export interface AgentGenerateOptions {
   useRAG?: boolean;
   ragFilters?: Record<string, any>;
   threadId?: string;
+  /** Authenticated user behind the turn; threaded into analytics records. */
+  userId?: string;
   /** Maximum number of tool-call round-trips before returning. Default: 5 */
   maxToolSteps?: number;
   /** When set, replaces default instructions + RAG concatenation. */
   buildSystemPrompt?: BuildSystemPromptFn;
   /** When true, tools are not passed to the provider. */
   disableTools?: boolean;
+  /**
+   * RAG metrics override for analytics. Use when RAG is retrieved outside the
+   * SDK pipeline (e.g. the host prefetches context and passes `useRAG: false`):
+   * the provided fields are merged over the SDK-computed base so the tracked
+   * `rag` metric reflects the real retrieval instead of an empty one.
+   */
+  ragInfo?: Partial<RAGMetrics>;
 }
 
 /**
@@ -74,6 +85,56 @@ function resolveSystemPromptAndRag(
     return instructions + '\n\n' + ragContexts.join('\n\n');
   }
   return instructions;
+}
+
+/** AI SDK usage shape varies by version (promptTokens/inputTokens). Normalize it. */
+type AISDKUsage = {
+  promptTokens?: number;
+  completionTokens?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+};
+
+function toTokenMetrics(usage?: AISDKUsage): TokenMetrics {
+  const promptTokens = usage?.promptTokens ?? usage?.inputTokens ?? 0;
+  const completionTokens = usage?.completionTokens ?? usage?.outputTokens ?? 0;
+  const totalTokens = usage?.totalTokens ?? promptTokens + completionTokens;
+  return { promptTokens, completionTokens, totalTokens };
+}
+
+/** Best-effort classification of provider errors for analytics. */
+function classifyLlmError(error: unknown): { errorType: string; isRetryable: boolean } {
+  const err = error as { name?: string; statusCode?: number; message?: string };
+  const status = err?.statusCode;
+  const msg = (err?.message || '').toLowerCase();
+  if (status === 429 || msg.includes('rate limit')) return { errorType: 'rate_limit', isRetryable: true };
+  if (status === 401 || status === 403 || msg.includes('api key')) return { errorType: 'auth', isRetryable: false };
+  if (msg.includes('timeout') || msg.includes('etimedout')) return { errorType: 'timeout', isRetryable: true };
+  if (status != null && status >= 500) return { errorType: 'provider_error', isRetryable: true };
+  return { errorType: err?.name || 'llm_error', isRetryable: false };
+}
+
+/** Own-managed retries for transient LLM errors (AI SDK internal retry is disabled so we can count them). */
+const LLM_MAX_RETRIES = 2;
+
+/**
+ * Runs an LLM call, retrying on retryable provider errors up to LLM_MAX_RETRIES.
+ * Returns the result plus how many retries it took (0 = succeeded first try) so callers
+ * can surface a `retry` warning in analytics.
+ */
+async function callLlmWithRetry<R>(fn: () => Promise<R>): Promise<{ value: R; retryCount: number }> {
+  let retryCount = 0;
+  for (;;) {
+    try {
+      return { value: await fn(), retryCount };
+    } catch (error) {
+      const { isRetryable } = classifyLlmError(error);
+      if (!isRetryable || retryCount >= LLM_MAX_RETRIES) throw error;
+      retryCount += 1;
+      await new Promise((resolve) => setTimeout(resolve, Math.min(500 * 2 ** (retryCount - 1), 4000)));
+    }
+  }
 }
 
 /**
@@ -262,12 +323,16 @@ export class Agent {
     metadata?: Record<string, any>;
   }> {
     const startTime = Date.now();
+    // Correlates the request/response/error analytics records of this single turn.
+    const correlationId = randomUUID();
 
     // Track request in analytics plugins
     if (messages.length > 0) {
       await this.pluginManager.trackRequest({
         agentId: this.data.id,
         threadId: options?.threadId,
+        userId: options?.userId,
+        correlationId,
         message: extractTextContent(messages[messages.length - 1].content),
         timestamp: new Date(),
       });
@@ -315,47 +380,81 @@ export class Agent {
 
     let text: string;
     let parsed: T | undefined;
+    let usage: AISDKUsage | undefined;
+    let toolCalls: Array<{ toolName: string }> | undefined;
+    let retryCount = 0;
 
-    if (options?.output?.mode === 'object') {
-      // Structured object output using AI SDK's experimental_output
-      // This validates the response against the schema and provides type safety
-      const result = await generateText({
-        model,
-        messages: beforeResult.messages,
-        system: systemPrompt,
-        ...(tools && { tools }),
-        ...(stopWhen && { stopWhen }),
-        experimental_output: Output.object({ schema: options.output.schema }),
-      });
-      text = JSON.stringify(result.experimental_output);
-      parsed = result.experimental_output as T;
-    } else if (options?.output?.mode === 'json') {
-      // Flexible JSON mode - add instruction and parse manually
-      const jsonSystemPrompt = systemPrompt + '\n\n---\nOUTPUT FORMAT: You MUST respond with valid JSON only. No markdown code blocks, no explanations, no additional text - just raw JSON that can be parsed directly.';
-      const result = await generateText({
-        model,
-        messages: beforeResult.messages,
-        system: jsonSystemPrompt,
-        ...(tools && { tools }),
-        ...(stopWhen && { stopWhen }),
-      });
-      text = result.text;
-      try {
-        parsed = JSON.parse(text) as T;
-      } catch {
-        // LLM didn't return valid JSON - leave parsed undefined
+    const llmStart = Date.now();
+    try {
+      if (options?.output?.mode === 'object') {
+        // Structured object output using AI SDK's experimental_output
+        // This validates the response against the schema and provides type safety
+        const outputSchema = options.output.schema;
+        const { value: result, retryCount: rc } = await callLlmWithRetry(() => generateText({
+          model,
+          messages: beforeResult.messages,
+          system: systemPrompt,
+          maxRetries: 0,
+          ...(tools && { tools }),
+          ...(stopWhen && { stopWhen }),
+          experimental_output: Output.object({ schema: outputSchema }),
+        }));
+        retryCount = rc;
+        text = JSON.stringify(result.experimental_output);
+        parsed = result.experimental_output as T;
+        usage = result.usage as AISDKUsage | undefined;
+        toolCalls = result.toolCalls as Array<{ toolName: string }> | undefined;
+      } else if (options?.output?.mode === 'json') {
+        // Flexible JSON mode - add instruction and parse manually
+        const jsonSystemPrompt = systemPrompt + '\n\n---\nOUTPUT FORMAT: You MUST respond with valid JSON only. No markdown code blocks, no explanations, no additional text - just raw JSON that can be parsed directly.';
+        const { value: result, retryCount: rc } = await callLlmWithRetry(() => generateText({
+          model,
+          messages: beforeResult.messages,
+          system: jsonSystemPrompt,
+          maxRetries: 0,
+          ...(tools && { tools }),
+          ...(stopWhen && { stopWhen }),
+        }));
+        retryCount = rc;
+        text = result.text;
+        usage = result.usage as AISDKUsage | undefined;
+        toolCalls = result.toolCalls as Array<{ toolName: string }> | undefined;
+        try {
+          parsed = JSON.parse(text) as T;
+        } catch {
+          // LLM didn't return valid JSON - leave parsed undefined
+        }
+      } else {
+        // Default: plain text mode
+        const { value: result, retryCount: rc } = await callLlmWithRetry(() => generateText({
+          model,
+          messages: beforeResult.messages,
+          system: systemPrompt,
+          maxRetries: 0,
+          ...(tools && { tools }),
+          ...(stopWhen && { stopWhen }),
+        }));
+        retryCount = rc;
+        text = result.text;
+        usage = result.usage as AISDKUsage | undefined;
+        toolCalls = result.toolCalls as Array<{ toolName: string }> | undefined;
       }
-    } else {
-      // Default: plain text mode
-      const result = await generateText({
-        model,
-        messages: beforeResult.messages,
-        system: systemPrompt,
-        ...(tools && { tools }),
-        ...(stopWhen && { stopWhen }),
+    } catch (error) {
+      const { errorType, isRetryable } = classifyLlmError(error);
+      await this.pluginManager.trackError({
+        agentId: this.data.id,
+        threadId: options?.threadId,
+        userId: options?.userId,
+        correlationId,
+        timestamp: new Date(),
+        errorType,
+        errorMessage: error instanceof Error ? error.message : 'Unknown error',
+        isRetryable,
+        component: 'llm',
       });
-      text = result.text;
+      throw error;
     }
+    const llmApiTime = Date.now() - llmStart;
 
     // Execute middleware after response
     const afterResult = await this.pluginManager.executeAfterResponse(text, {
@@ -366,12 +465,33 @@ export class Agent {
 
     // Track response in analytics plugins
     const latency = Date.now() - startTime;
-    await this.pluginManager.trackResponse({
+    const tokens = toTokenMetrics(usage);
+    const rag: RAGMetrics = {
+      enabled: ragContexts.length > 0 || !!options?.useRAG || !!options?.ragInfo,
+      documentsRetrieved: ragContexts.length,
+      sourcesCount: ragContexts.length,
+      // Host-provided metrics (e.g. prefetched RAG) take precedence over the
+      // SDK-computed base so analytics reflect the real retrieval.
+      ...options?.ragInfo,
+    };
+    const warningReasons: string[] = [];
+    if (retryCount > 0) warningReasons.push('retry');
+    if (afterResult.response.trim().length === 0) warningReasons.push('empty_response');
+    await this.pluginManager.trackResponseExtended({
       agentId: this.data.id,
       threadId: options?.threadId,
+      userId: options?.userId,
+      correlationId,
       response: afterResult.response,
-      latency,
+      responseLength: afterResult.response.length,
       timestamp: new Date(),
+      timings: { total: latency, llmApiTime },
+      tokens,
+      rag,
+      success: true,
+      model: this.data.model,
+      provider: this.data.provider,
+      ...(warningReasons.length > 0 && { warningReasons }),
     });
 
     return {
@@ -379,8 +499,13 @@ export class Agent {
       ...(parsed !== undefined && { parsed }),
       metadata: {
         ...afterResult.metadata,
+        correlationId,
         ragMetadata,
         latency,
+        tokenUsage: tokens,
+        ...(toolCalls && toolCalls.length > 0 && {
+          toolCalls: toolCalls.map((tc) => ({ toolName: tc.toolName })),
+        }),
       },
     };
   }
@@ -395,6 +520,8 @@ export class Agent {
     onError?: (error: Error) => void | Promise<void>,
     options?: AgentGenerateOptions,
   ): Promise<void> {
+    // Correlates the request/response/error analytics records of this single turn.
+    const correlationId = randomUUID();
     try {
       const startTime = Date.now();
 
@@ -403,6 +530,8 @@ export class Agent {
         await this.pluginManager.trackRequest({
           agentId: this.data.id,
           threadId: options?.threadId,
+          userId: options?.userId,
+          correlationId,
           message: extractTextContent(messages[messages.length - 1].content),
           timestamp: new Date(),
         });
@@ -446,18 +575,53 @@ export class Agent {
         ? stepCountIs(options?.maxToolSteps ?? 5)
         : undefined;
 
-      const { textStream } = streamText({
-        model,
-        messages: beforeResult.messages,
-        system: systemPrompt,
-        ...(tools && { tools }),
-        ...(stopWhen && { stopWhen }),
-      });
+      const llmStart = Date.now();
+      const startStream = () =>
+        streamText({
+          model,
+          messages: beforeResult.messages,
+          system: systemPrompt,
+          maxRetries: 0,
+          ...(tools && { tools }),
+          ...(stopWhen && { stopWhen }),
+        });
+
+      // Retry only while no chunk has been emitted yet, so an established stream
+      // is never restarted mid-flight. Once the first token lands we commit.
+      let streamResult = startStream();
+      let iterator = streamResult.textStream[Symbol.asyncIterator]();
+      let firstResult: IteratorResult<string>;
+      let retryCount = 0;
+      for (;;) {
+        try {
+          firstResult = await iterator.next();
+          break;
+        } catch (error) {
+          const { isRetryable } = classifyLlmError(error);
+          if (!isRetryable || retryCount >= LLM_MAX_RETRIES) throw error;
+          retryCount += 1;
+          await new Promise((resolve) =>
+            setTimeout(resolve, Math.min(500 * 2 ** (retryCount - 1), 4000)),
+          );
+          streamResult = startStream();
+          iterator = streamResult.textStream[Symbol.asyncIterator]();
+        }
+      }
 
       let fullText = '';
-      for await (const chunk of textStream) {
-        fullText += chunk;
-        onChunk(chunk);
+      let firstChunkAt: number | undefined;
+      for (let result = firstResult; !result.done; result = await iterator.next()) {
+        if (firstChunkAt === undefined) firstChunkAt = Date.now();
+        fullText += result.value;
+        onChunk(result.value);
+      }
+
+      // Token usage resolves after the stream is fully consumed
+      let usage: AISDKUsage | undefined;
+      try {
+        usage = (await streamResult.usage) as AISDKUsage | undefined;
+      } catch {
+        // usage not available
       }
 
       // Execute middleware after response
@@ -469,22 +633,61 @@ export class Agent {
 
       // Track response in analytics plugins
       const latency = Date.now() - startTime;
-      await this.pluginManager.trackResponse({
+      const tokens = toTokenMetrics(usage);
+      const rag: RAGMetrics = {
+        enabled: ragContexts.length > 0 || !!options?.useRAG || !!options?.ragInfo,
+        documentsRetrieved: ragContexts.length,
+        sourcesCount: ragContexts.length,
+        // Host-provided metrics (e.g. prefetched RAG) take precedence over the
+        // SDK-computed base so analytics reflect the real retrieval.
+        ...options?.ragInfo,
+      };
+      const warningReasons: string[] = [];
+      if (retryCount > 0) warningReasons.push('retry');
+      if (afterResult.response.trim().length === 0) warningReasons.push('empty_response');
+      await this.pluginManager.trackResponseExtended({
         agentId: this.data.id,
         threadId: options?.threadId,
+        userId: options?.userId,
+        correlationId,
         response: afterResult.response,
-        latency,
+        responseLength: afterResult.response.length,
         timestamp: new Date(),
+        timings: {
+          total: latency,
+          llmApiTime: Date.now() - llmStart,
+          ...(firstChunkAt && { timeToFirstToken: firstChunkAt - llmStart }),
+        },
+        tokens,
+        rag,
+        success: true,
+        model: this.data.model,
+        provider: this.data.provider,
+        ...(warningReasons.length > 0 && { warningReasons }),
       });
 
       if (onComplete) {
         await onComplete(afterResult.response, {
           ...afterResult.metadata,
+          correlationId,
           ragMetadata,
           latency,
+          tokenUsage: tokens,
         });
       }
     } catch (error) {
+      const { errorType, isRetryable } = classifyLlmError(error);
+      await this.pluginManager.trackError({
+        agentId: this.data.id,
+        threadId: options?.threadId,
+        userId: options?.userId,
+        correlationId,
+        timestamp: new Date(),
+        errorType,
+        errorMessage: error instanceof Error ? error.message : 'Unknown error',
+        isRetryable,
+        component: 'llm',
+      });
       if (onError) {
         await onError(error instanceof Error ? error : new Error('Unknown error'));
       } else {

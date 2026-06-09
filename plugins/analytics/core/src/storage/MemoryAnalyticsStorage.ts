@@ -5,6 +5,15 @@ import type {
   StoredError,
   AnalyticsQueryOptions,
   AggregationOptions,
+  SystemLogFilter,
+  SystemLogPage,
+  SystemLogEntry,
+} from './AnalyticsStorage';
+import {
+  responseToSystemLog,
+  errorToSystemLog,
+  mergeSystemLogs,
+  isBeforeCursor,
 } from './AnalyticsStorage';
 
 /**
@@ -51,6 +60,53 @@ export class MemoryAnalyticsStorage implements AnalyticsStorage {
 
   async getErrorCount(options?: AggregationOptions): Promise<number> {
     return this.filterRecords(this.errors, options).length;
+  }
+
+  async getSystemLogs(filter: SystemLogFilter = {}): Promise<SystemLogPage> {
+    const limit = filter.limit ?? 50;
+
+    const inRange = (ts: Date): boolean => {
+      const t = ts.getTime();
+      if (filter.from && t < filter.from.getTime()) return false;
+      if (filter.to && t > filter.to.getTime()) return false;
+      return true;
+    };
+
+    // Resume strictly after the cursor by (timestamp, seq) so records sharing
+    // the cursor's millisecond aren't lost across pages.
+    const afterCursor = (entry: SystemLogEntry): boolean =>
+      !filter.cursor || isBeforeCursor(entry.timestamp, entry.id, filter.cursor);
+
+    const wantErrors = !filter.level || filter.level === 'error';
+    const wantResponses = !filter.level || filter.level === 'warning' || filter.level === 'info';
+
+    const entries: SystemLogEntry[] = [];
+
+    if (wantResponses) {
+      for (const r of this.responses) {
+        if (!r.success) continue;
+        if (filter.agentId && r.agentId !== filter.agentId) continue;
+        if (!inRange(r.timestamp)) continue;
+        const entry = responseToSystemLog(r);
+        if (filter.level && entry.level !== filter.level) continue;
+        if (filter.component && (entry.component ?? 'llm') !== filter.component) continue;
+        if (!afterCursor(entry)) continue;
+        entries.push(entry);
+      }
+    }
+
+    if (wantErrors) {
+      for (const e of this.errors) {
+        if (filter.agentId && e.agentId !== filter.agentId) continue;
+        if (!inRange(e.timestamp)) continue;
+        const entry = errorToSystemLog(e);
+        if (filter.component && entry.component !== filter.component) continue;
+        if (!afterCursor(entry)) continue;
+        entries.push(entry);
+      }
+    }
+
+    return mergeSystemLogs(entries, limit);
   }
 
   async deleteOlderThan(date: Date): Promise<{ requests: number; responses: number; errors: number }> {

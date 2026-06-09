@@ -746,6 +746,115 @@ describe('SnapAgentAnalytics', () => {
       const stored = await storage.getRequests();
       expect(stored.length).toBe(1);
     });
+
+    it('re-queues the batch when a storage write fails (no data loss)', async () => {
+      class FailingStorage extends MemoryAnalyticsStorage {
+        failNext = true;
+        async saveResponses(responses: any[]): Promise<void> {
+          if (this.failNext) {
+            this.failNext = false;
+            throw new Error('mongo down');
+          }
+          return super.saveResponses(responses);
+        }
+      }
+
+      const storage = new FailingStorage();
+      const a = new SnapAgentAnalytics({ storage, flushInterval: 60000 });
+
+      await a.trackResponse({
+        agentId: 'agent-1',
+        response: 'Hi',
+        latency: 100,
+        timestamp: new Date(),
+      });
+      expect(a.getPendingCount().responses).toBe(1);
+
+      // First flush fails on the responses write; the batch must survive.
+      await expect(a.flush()).rejects.toThrow('mongo down');
+      expect(a.getPendingCount().responses).toBe(1);
+      expect((await storage.getResponses()).length).toBe(0);
+
+      // Next flush retries the re-queued batch successfully.
+      await a.flush();
+      expect(a.getPendingCount().responses).toBe(0);
+      expect((await storage.getResponses()).length).toBe(1);
+    });
+  });
+
+  describe('maxInMemoryEvents cap', () => {
+    it('drops the oldest in-memory events beyond the cap', async () => {
+      const a = new SnapAgentAnalytics({ maxInMemoryEvents: 3 });
+
+      for (let i = 0; i < 5; i++) {
+        await a.trackResponse({
+          agentId: 'agent-1',
+          response: `r${i}`,
+          latency: 10,
+          timestamp: new Date(),
+        });
+      }
+
+      expect(a.exportData().responses.length).toBe(3);
+    });
+  });
+
+  describe('correlationId', () => {
+    it('links request, response and error of the same turn', async () => {
+      const a = new SnapAgentAnalytics();
+      const correlationId = 'turn-xyz';
+
+      await a.trackRequestExtended({
+        agentId: 'agent-1',
+        correlationId,
+        message: 'Hello',
+        messageLength: 5,
+        timestamp: new Date(),
+      });
+      await a.trackResponseExtended({
+        agentId: 'agent-1',
+        correlationId,
+        response: 'Hi',
+        responseLength: 2,
+        timestamp: new Date(),
+        timings: { total: 100 },
+        tokens: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+        success: true,
+      });
+      await a.trackError({
+        agentId: 'agent-1',
+        correlationId,
+        timestamp: new Date(),
+        errorType: 'timeout',
+        errorMessage: 'boom',
+      });
+
+      const data = a.exportData();
+      expect(data.requests[0].correlationId).toBe(correlationId);
+      expect(data.responses[0].correlationId).toBe(correlationId);
+      expect(data.errors[0].correlationId).toBe(correlationId);
+      // Record ids derive from the correlationId so they survive process restarts.
+      expect(data.requests[0].id).toBe(`req-${correlationId}`);
+      expect(data.responses[0].id).toBe(`res-${correlationId}`);
+      expect(data.errors[0].id).toBe(`err-${correlationId}`);
+    });
+
+    it('falls back to the in-process counter when correlationId is absent', async () => {
+      const a = new SnapAgentAnalytics();
+
+      await a.trackResponseExtended({
+        agentId: 'agent-1',
+        response: 'Hi',
+        responseLength: 2,
+        timestamp: new Date(),
+        timings: { total: 100 },
+        tokens: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+        success: true,
+      });
+
+      const data = a.exportData();
+      expect(data.responses[0].id).toMatch(/^res-\d+$/);
+    });
   });
 
   describe('stop', () => {

@@ -453,7 +453,8 @@ export class UpstashStorage implements StorageAdapter {
     threadId: string,
     role: MessageRole,
     content: string,
-    attachments?: MessageAttachment[]
+    attachments?: MessageAttachment[],
+    metadata?: Record<string, any>
   ): Promise<string> {
     const thread = await this.getThread(threadId);
     if (!thread) {
@@ -467,6 +468,7 @@ export class UpstashStorage implements StorageAdapter {
       content,
       timestamp: new Date(),
       attachments,
+      ...(metadata && { metadata }),
     };
 
     thread.messages.push(message);
