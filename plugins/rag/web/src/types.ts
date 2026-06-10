@@ -77,6 +77,10 @@ export interface WebRAGConfig {
   maxChunkSize?: number;   // Default: 1500 characters (0 = no chunking)
   chunkOverlap?: number;   // Default: 200 characters
 
+  // Embedding throughput (ingestion)
+  embeddingBatchSize?: number;    // Texts per embeddings request. Default: 100
+  embeddingConcurrency?: number;  // Concurrent embedding requests. Default: 4
+
   // Caching
   cache?: {
     embeddings?: {

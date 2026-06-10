@@ -6,11 +6,15 @@ const mongoLedger = vi.hoisted(() => {
   const toArrayFind = vi.fn().mockResolvedValue([]);
   const mockFindOne = vi.fn().mockResolvedValue(null);
   const mockUpdateOne = vi.fn().mockResolvedValue({ upsertedCount: 1 });
+  const mockUpdateMany = vi.fn().mockResolvedValue({ modifiedCount: 1 });
+  const mockBulkWrite = vi.fn().mockResolvedValue({ upsertedCount: 1, modifiedCount: 0 });
   const mockCollection = {
     aggregate: vi.fn().mockReturnValue({
       toArray: vi.fn().mockResolvedValue([]),
     }),
     updateOne: mockUpdateOne,
+    updateMany: mockUpdateMany,
+    bulkWrite: mockBulkWrite,
     createIndex: vi.fn().mockResolvedValue('idx'),
     deleteMany: vi.fn().mockResolvedValue({ deletedCount: 1 }),
     findOne: mockFindOne,
@@ -36,6 +40,8 @@ const mongoLedger = vi.hoisted(() => {
     MongoClient: vi.fn().mockImplementation(() => mockClient),
     mockFindOne,
     mockUpdateOne,
+    mockUpdateMany,
+    mockBulkWrite,
     toArrayFind,
   };
 });
@@ -44,15 +50,27 @@ vi.mock('mongodb', () => ({
   MongoClient: mongoLedger.MongoClient,
 }));
 
-// Mock OpenAI
+// Mock OpenAI — batch-aware: returns one item per input (string or string[]),
+// each carrying its `index` and an embedding whose first slot encodes the input
+// text length so tests can verify ordering/alignment.
+const openaiMock = vi.hoisted(() => {
+  const create = vi.fn(async (params: { input: string | string[] }) => {
+    const inputs = Array.isArray(params.input) ? params.input : [params.input];
+    return {
+      data: inputs.map((text, index) => {
+        const embedding = new Array(1536).fill(0.1);
+        embedding[0] = text.length;
+        return { index, embedding };
+      }),
+    };
+  });
+  return { create };
+});
+
 vi.mock('openai', () => {
   return {
     default: vi.fn().mockImplementation(() => ({
-      embeddings: {
-        create: vi.fn().mockResolvedValue({
-          data: [{ embedding: new Array(1536).fill(0.1) }],
-        }),
-      },
+      embeddings: { create: openaiMock.create },
     })),
   };
 });
@@ -161,6 +179,123 @@ describe('WebRAGPlugin', () => {
 
       expect(result.success).toBe(true);
       expect(result.indexed).toBe(25);
+    });
+  });
+
+  describe('embedding batching', () => {
+    it('sends arrays of texts and batches requests (not one per chunk)', async () => {
+      const documents = Array.from({ length: 250 }, (_, i) => ({
+        id: `doc-${i}`,
+        content: `Content number ${i}`,
+        metadata: { type: 'blog' },
+      }));
+
+      const result = await plugin.ingest(documents);
+
+      expect(result.success).toBe(true);
+      expect(result.indexed).toBe(250);
+
+      // 250 chunks / batchSize 100 => 3 requests, each with an array input.
+      expect(openaiMock.create).toHaveBeenCalledTimes(3);
+      for (const call of openaiMock.create.mock.calls) {
+        expect(Array.isArray(call[0].input)).toBe(true);
+      }
+      const sizes = openaiMock.create.mock.calls.map((c) => (c[0].input as string[]).length);
+      expect(sizes).toEqual([100, 100, 50]);
+
+      // Persistence uses bulkWrite, not one updateOne per chunk.
+      expect(mongoLedger.mockBulkWrite).toHaveBeenCalled();
+      expect(mongoLedger.mockUpdateOne).not.toHaveBeenCalled();
+    });
+
+    it('aligns each embedding with its own chunk', async () => {
+      const documents = Array.from({ length: 5 }, (_, i) => ({
+        id: `doc-${i}`,
+        content: 'x'.repeat(10 + i), // distinct lengths => distinct embedding[0]
+        metadata: { type: 'blog' },
+      }));
+
+      await plugin.ingest(documents);
+
+      const ops = mongoLedger.mockBulkWrite.mock.calls.flatMap((c) => c[0] as any[]);
+      expect(ops).toHaveLength(5);
+      for (const op of ops) {
+        const stored = op.updateOne.update.$set;
+        // mock encodes input length in embedding[0]
+        expect(stored.embedding[0]).toBe(stored.content.length);
+      }
+    });
+
+    it('reuses cached embeddings on re-ingest (no new API calls)', async () => {
+      const cachedPlugin = new WebRAGPlugin({
+        mongoUri: 'mongodb://localhost:27017',
+        dbName: 'test_db',
+        openaiApiKey: 'test-key',
+        tenantId: 'test-tenant',
+        cache: { embeddings: { enabled: true } },
+      });
+
+      const documents = [
+        { id: 'doc-1', content: 'Cached content', metadata: { type: 'blog' } },
+      ];
+
+      await cachedPlugin.ingest(documents);
+      const callsAfterFirst = openaiMock.create.mock.calls.length;
+
+      await cachedPlugin.ingest(documents);
+      expect(openaiMock.create.mock.calls.length).toBe(callsAfterFirst);
+
+      await cachedPlugin.disconnect();
+    });
+
+    it('emits crawl progress incrementally across macro-batches (live progress)', async () => {
+      // macro-batch = embeddingBatchSize * embeddingConcurrency = 1 => one
+      // crawl-progress emit per chunk, so the counter climbs gradually.
+      const incremental = new WebRAGPlugin({
+        mongoUri: 'mongodb://localhost:27017',
+        dbName: 'test_db',
+        openaiApiKey: 'test-key',
+        tenantId: 'test-tenant',
+        embeddingBatchSize: 1,
+        embeddingConcurrency: 1,
+      });
+
+      const seen: number[] = [];
+      const documents = Array.from({ length: 5 }, (_, i) => ({
+        id: `doc-${i}`,
+        content: `Content ${i}`,
+        metadata: { type: 'blog' },
+      }));
+
+      await incremental.ingest(documents, {
+        metadata: {
+          onCrawlProgress: (u: { phase: string; chunksProcessed: number }) => {
+            if (u.phase === 'indexing') seen.push(u.chunksProcessed);
+          },
+        },
+      } as any);
+
+      // Initial emit at 0, then one per macro-batch climbing to the total.
+      expect(seen[0]).toBe(0);
+      expect(seen.filter((n) => n > 0)).toEqual([1, 2, 3, 4, 5]);
+
+      await incremental.disconnect();
+    });
+
+    it('isolates per-document failures when a bulkWrite batch fails', async () => {
+      mongoLedger.mockBulkWrite.mockRejectedValueOnce(new Error('write failed'));
+
+      const documents = [
+        { id: 'doc-1', content: 'A', metadata: { type: 'blog' } },
+        { id: 'doc-2', content: 'B', metadata: { type: 'blog' } },
+      ];
+
+      const result = await plugin.ingest(documents);
+
+      expect(result.success).toBe(false);
+      expect(result.failed).toBe(2);
+      expect(result.indexed).toBe(0);
+      expect(result.errors?.[0].error).toContain('write failed');
     });
   });
 
@@ -1578,6 +1713,8 @@ describe('WebRAGPlugin', () => {
             find: mockFind,
             createIndex: vi.fn().mockResolvedValue('idx'),
             updateOne: mongoLedger.mockUpdateOne,
+            bulkWrite: mongoLedger.mockBulkWrite,
+            deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }),
             findOne: mongoLedger.mockFindOne,
           }),
         }),

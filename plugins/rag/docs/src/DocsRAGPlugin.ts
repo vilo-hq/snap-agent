@@ -10,6 +10,7 @@ import type {
 } from '@snap-agent/core';
 import { MongoClient, Db, Collection } from 'mongodb';
 import OpenAI from 'openai';
+import { runWithConcurrency } from './concurrency';
 
 // ============================================================================
 // Types
@@ -66,6 +67,18 @@ export interface DocsRAGConfig {
    * @default 200
    */
   chunkOverlap?: number;
+
+  /**
+   * Texts sent per embeddings request during ingestion
+   * @default 100
+   */
+  embeddingBatchSize?: number;
+
+  /**
+   * Concurrent embedding requests during ingestion
+   * @default 4
+   */
+  embeddingConcurrency?: number;
 
   /**
    * Number of results to return
@@ -222,6 +235,8 @@ export class DocsRAGPlugin implements RAGPlugin {
       chunkingStrategy: config.chunkingStrategy || 'markdown',
       maxChunkSize: config.maxChunkSize || 1000,
       chunkOverlap: config.chunkOverlap || 200,
+      embeddingBatchSize: config.embeddingBatchSize || 100,
+      embeddingConcurrency: config.embeddingConcurrency || 4,
       limit: config.limit || 5,
       minSimilarity: config.minSimilarity || 0.7,
       includeCode: config.includeCode !== false,
@@ -448,6 +463,9 @@ export class DocsRAGPlugin implements RAGPlugin {
 
     const collection = await this.getCollection();
     const errors: Array<{ id: string; error: string }> = [];
+    // Captured after the guard above so it stays narrowed to `string` inside
+    // the bulkWrite map closure (TS widens options.agentId back to string|undefined there).
+    const agentId = options.agentId;
 
     const planned: Array<{ doc: RAGDocument; chunks: PlannedDocChunk[] }> = [];
     for (const doc of documents) {
@@ -479,74 +497,126 @@ export class DocsRAGPlugin implements RAGPlugin {
     let indexed = 0;
     let processedGlobal = 0;
 
+    // Flatten every chunk across all documents so they can be processed in
+    // batched, concurrent macro-batches (instead of one request + one write per
+    // chunk). Each macro-batch EMBEDS and PERSISTS before moving on, so progress
+    // is reported incrementally throughout the run (not only at the very end).
+    type FlatChunk = { doc: RAGDocument; chunkIndex: number; chunk: PlannedDocChunk };
+    const flat: FlatChunk[] = [];
+    const chunkCountByDoc = new Map<string, number>();
     for (const { doc, chunks } of planned) {
+      chunkCountByDoc.set(doc.id, chunks.length);
+      for (let i = 0; i < chunks.length; i++) {
+        flat.push({ doc, chunkIndex: i, chunk: chunks[i] });
+      }
+    }
+
+    // Notify the embedding phase once before processing starts.
+    if (options.onIngestProgress && planned.length > 0) {
+      const first = planned[0];
+      await options.onIngestProgress({
+        phase: 'embedding' as IngestProgressPhase,
+        documentId: first.doc.id,
+        chunkIndex: 0,
+        chunksInDocument: first.chunks.length,
+        processedGlobal,
+        totalGlobal: totalChunks,
+        byDocument: buildIngestByDocumentSnapshot(planDocumentsMeta, first.doc.id, 0),
+      });
+    }
+
+    const failedDocIds = new Set<string>();
+    const remainingByDoc = new Map<string, number>(chunkCountByDoc);
+    const markFailed = (docId: string, error: unknown) => {
+      if (failedDocIds.has(docId)) return;
+      failedDocIds.add(docId);
+      errors.push({
+        id: docId,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
+    };
+
+    // One macro-batch ≈ one full concurrency wave of embedding sub-batches.
+    const macroSize = Math.max(
+      1,
+      (this.config.embeddingBatchSize ?? 100) * (this.config.embeddingConcurrency ?? 4)
+    );
+
+    for (let start = 0; start < flat.length; start += macroSize) {
+      const slice = flat
+        .slice(start, start + macroSize)
+        .filter((f) => !failedDocIds.has(f.doc.id));
+      if (slice.length === 0) continue;
+
+      // Embed this macro-batch (internally split into concurrent sub-batches).
+      let embeddings: number[][];
       try {
-        for (let i = 0; i < chunks.length; i++) {
-          const chunk = chunks[i];
+        embeddings = await this.generateEmbeddingsBatch(slice.map((f) => f.chunk.content));
+      } catch (error) {
+        for (const f of slice) markFailed(f.doc.id, error);
+        continue;
+      }
 
-          if (options.onIngestProgress) {
-            const byDocEmb = buildIngestByDocumentSnapshot(planDocumentsMeta, doc.id, i);
-            await options.onIngestProgress({
-              phase: 'embedding' as IngestProgressPhase,
-              documentId: doc.id,
-              chunkIndex: i,
-              chunksInDocument: chunks.length,
-              processedGlobal,
-              totalGlobal: totalChunks,
-              byDocument: byDocEmb,
-            });
-          }
+      // Persist this macro-batch with a single bulkWrite.
+      const ops = slice.map((f, i) => {
+        const id = `chunk-${f.doc.id}-${f.chunkIndex}`;
+        const storedChunk: Omit<StoredDocChunk, 'createdAt' | 'updatedAt'> = {
+          id,
+          documentId: f.doc.id,
+          chunkIndex: f.chunkIndex,
+          content: f.chunk.content,
+          embedding: embeddings[i],
+          metadata: {
+            ...f.doc.metadata,
+            ...f.chunk.metadata,
+          },
+          tenantId: this.config.tenantId,
+          agentId,
+        };
 
-          const embedding = await this.generateEmbedding(chunk.content);
-
-          const storedChunk: Omit<StoredDocChunk, 'createdAt' | 'updatedAt'> = {
-            id: `chunk-${doc.id}-${i}`,
-            documentId: doc.id,
-            chunkIndex: i,
-            content: chunk.content,
-            embedding,
-            metadata: {
-              ...doc.metadata,
-              ...chunk.metadata,
-            },
-            tenantId: this.config.tenantId,
-            agentId: options.agentId,
-          };
-
-          await collection.updateOne(
-            {
-              tenantId: this.config.tenantId,
-              agentId: options.agentId,
-              id: storedChunk.id,
-            },
-            {
+        return {
+          updateOne: {
+            filter: { tenantId: this.config.tenantId, agentId, id },
+            update: {
               $set: { ...storedChunk, updatedAt: new Date() },
               $setOnInsert: { createdAt: new Date() },
             },
-            { upsert: true }
-          );
+            upsert: true,
+          },
+        };
+      });
 
-          processedGlobal += 1;
-
-          if (options.onIngestProgress) {
-            const byDocStored = buildIngestByDocumentSnapshot(planDocumentsMeta, doc.id, i + 1);
-            await options.onIngestProgress({
-              phase: 'stored' as IngestProgressPhase,
-              documentId: doc.id,
-              chunkIndex: i,
-              chunksInDocument: chunks.length,
-              processedGlobal,
-              totalGlobal: totalChunks,
-              byDocument: byDocStored,
-            });
-          }
-        }
-
-        indexed++;
+      try {
+        await collection.bulkWrite(ops as any);
       } catch (error) {
-        errors.push({
-          id: doc.id,
-          error: error instanceof Error ? error.message : 'Unknown error',
+        for (const f of slice) markFailed(f.doc.id, error);
+        continue;
+      }
+
+      processedGlobal += slice.length;
+
+      // A document counts as indexed once all of its chunks are written.
+      for (const f of slice) {
+        const remaining = (remainingByDoc.get(f.doc.id) ?? 0) - 1;
+        remainingByDoc.set(f.doc.id, remaining);
+        if (remaining === 0) indexed++;
+      }
+
+      // Emit incremental 'stored' progress for this macro-batch.
+      if (options.onIngestProgress) {
+        const last = slice[slice.length - 1];
+        await options.onIngestProgress({
+          phase: 'stored' as IngestProgressPhase,
+          documentId: last.doc.id,
+          chunkIndex: last.chunkIndex,
+          chunksInDocument: chunkCountByDoc.get(last.doc.id) ?? last.chunkIndex + 1,
+          processedGlobal,
+          totalGlobal: totalChunks,
+          byDocument: buildIngestByDocumentSnapshot(
+            planDocumentsMeta,
+            last.doc.id,
+            last.chunkIndex + 1
+          ),
         });
       }
     }
@@ -925,54 +995,162 @@ export class DocsRAGPlugin implements RAGPlugin {
     }
 
     // Cache result
-    if (cacheConfig?.enabled) {
-      const maxSize = cacheConfig.maxSize ?? 1000;
-      if (this.embeddingCache.size >= maxSize) {
-        // Remove oldest entry
-        const firstKey = this.embeddingCache.keys().next().value;
-        if (firstKey) this.embeddingCache.delete(firstKey);
-      }
-      this.embeddingCache.set(text, { value: embedding, timestamp: Date.now() });
-    }
+    this.storeEmbeddingInCache(text, embedding);
 
     return embedding;
+  }
+
+  /** Store an embedding in the LRU-ish in-memory cache (no-op if caching disabled). */
+  private storeEmbeddingInCache(text: string, embedding: number[]): void {
+    const cacheConfig = this.config.cache?.embeddings;
+    if (!cacheConfig?.enabled) return;
+    const maxSize = cacheConfig.maxSize ?? 1000;
+    if (this.embeddingCache.size >= maxSize) {
+      // Remove oldest entry
+      const firstKey = this.embeddingCache.keys().next().value;
+      if (firstKey) this.embeddingCache.delete(firstKey);
+    }
+    this.embeddingCache.set(text, { value: embedding, timestamp: Date.now() });
+  }
+
+  /**
+   * Embed many texts using true API batching + bounded concurrency.
+   * Sends arrays of up to `embeddingBatchSize` texts per request and runs
+   * up to `embeddingConcurrency` requests in parallel. Cache hits are resolved
+   * up front and duplicate texts are embedded only once.
+   * Returns embeddings aligned 1:1 with the input order.
+   */
+  private async generateEmbeddingsBatch(texts: string[]): Promise<number[][]> {
+    const results = new Array<number[]>(texts.length);
+    const cacheConfig = this.config.cache?.embeddings;
+    const ttl = cacheConfig?.ttl ?? 3600000;
+
+    // Resolve cache hits; group remaining misses by unique text.
+    const missTextToIndices = new Map<string, number[]>();
+    for (let i = 0; i < texts.length; i++) {
+      const text = texts[i];
+      if (cacheConfig?.enabled) {
+        const cached = this.embeddingCache.get(text);
+        if (cached && Date.now() - cached.timestamp < ttl) {
+          this.cacheStats.hits++;
+          results[i] = cached.value;
+          continue;
+        }
+      }
+      this.cacheStats.misses++;
+      const existing = missTextToIndices.get(text);
+      if (existing) existing.push(i);
+      else missTextToIndices.set(text, [i]);
+    }
+
+    const missTexts = [...missTextToIndices.keys()];
+    if (missTexts.length === 0) return results;
+
+    const batchSize = Math.max(1, this.config.embeddingBatchSize ?? 100);
+    const concurrency = Math.max(1, this.config.embeddingConcurrency ?? 4);
+
+    const subBatches: string[][] = [];
+    for (let i = 0; i < missTexts.length; i += batchSize) {
+      subBatches.push(missTexts.slice(i, i + batchSize));
+    }
+
+    const jobs = subBatches.map((batch) => () => this.generateEmbeddingsForBatch(batch));
+    const batchResults = await runWithConcurrency(jobs, concurrency);
+
+    for (let b = 0; b < subBatches.length; b++) {
+      const batch = subBatches[b];
+      const embeddings = batchResults[b];
+      for (let j = 0; j < batch.length; j++) {
+        const text = batch[j];
+        const embedding = embeddings[j];
+        for (const idx of missTextToIndices.get(text)!) {
+          results[idx] = embedding;
+        }
+        this.storeEmbeddingInCache(text, embedding);
+      }
+    }
+
+    return results;
+  }
+
+  /** Embed a single sub-batch with the configured provider. */
+  private async generateEmbeddingsForBatch(texts: string[]): Promise<number[][]> {
+    if (this.config.embeddingProvider === 'voyage') {
+      return this.generateVoyageEmbeddings(texts);
+    }
+    return this.generateOpenAIEmbeddings(texts);
   }
 
   /**
    * Generate embedding using OpenAI
    */
   private async generateOpenAIEmbedding(text: string): Promise<number[]> {
+    const [embedding] = await this.generateOpenAIEmbeddings([text]);
+    return embedding;
+  }
+
+  /** Generate embeddings for an array of texts using OpenAI (single request). */
+  private async generateOpenAIEmbeddings(texts: string[]): Promise<number[][]> {
     const response = await this.openai.embeddings.create({
       model: this.config.embeddingModel,
-      input: text,
+      input: texts,
     });
 
-    return response.data[0].embedding;
+    // OpenAI returns one item per input; sort by index to be safe.
+    return [...response.data]
+      .sort((a, b) => a.index - b.index)
+      .map((d) => d.embedding);
   }
 
   /**
    * Generate embedding using Voyage AI
    */
   private async generateVoyageEmbedding(text: string): Promise<number[]> {
-    const response = await fetch('https://api.voyageai.com/v1/embeddings', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${this.config.embeddingProviderApiKey}`,
-      },
-      body: JSON.stringify({
-        model: this.config.embeddingModel,
-        input: text,
-      }),
-    });
+    const [embedding] = await this.generateVoyageEmbeddings([text]);
+    return embedding;
+  }
 
-    if (!response.ok) {
+  /**
+   * Generate embeddings for an array of texts using Voyage AI (single request).
+   * Voyage is called via raw fetch (no built-in retries), so we retry a few
+   * times on rate-limit / transient server errors with exponential backoff.
+   */
+  private async generateVoyageEmbeddings(texts: string[]): Promise<number[][]> {
+    const maxRetries = 3;
+    let lastError: unknown;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      const response = await fetch('https://api.voyageai.com/v1/embeddings', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${this.config.embeddingProviderApiKey}`,
+        },
+        body: JSON.stringify({
+          model: this.config.embeddingModel,
+          input: texts,
+        }),
+      });
+
+      if (response.ok) {
+        const data = (await response.json()) as {
+          data: Array<{ embedding: number[]; index: number }>;
+        };
+        return [...data.data]
+          .sort((a, b) => a.index - b.index)
+          .map((d) => d.embedding);
+      }
+
       const error = await response.text();
-      throw new Error(`Voyage API error: ${response.status} - ${error}`);
+      lastError = new Error(`Voyage API error: ${response.status} - ${error}`);
+
+      // Retry only on rate-limit / transient server errors.
+      const retryable = response.status === 429 || response.status >= 500;
+      if (!retryable || attempt === maxRetries) break;
+      await new Promise((resolve) => setTimeout(resolve, 500 * 2 ** attempt));
     }
 
-    const data = (await response.json()) as { data: Array<{ embedding: number[] }> };
-    return data.data[0].embedding;
+    throw lastError;
   }
 
   // ============================================================================

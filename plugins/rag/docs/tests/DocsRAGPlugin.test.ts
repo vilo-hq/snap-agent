@@ -8,6 +8,7 @@ import type { MongoClient, Db, Collection } from 'mongodb';
 
 // Mock MongoDB
 const mockUpdateOne = vi.fn().mockResolvedValue({ modifiedCount: 1, upsertedCount: 1 });
+const mockBulkWrite = vi.fn().mockResolvedValue({ modifiedCount: 0, upsertedCount: 1 });
 const mockDeleteMany = vi.fn().mockResolvedValue({ deletedCount: 1 });
 const mockCountDocuments = vi.fn().mockResolvedValue(5);
 const mockAggregate = vi.fn(() => ({
@@ -31,12 +32,20 @@ const mockCreateIndex = vi.fn().mockResolvedValue('index-created');
 
 const mockCollection = {
   updateOne: mockUpdateOne,
+  bulkWrite: mockBulkWrite,
   deleteMany: mockDeleteMany,
   countDocuments: mockCountDocuments,
   aggregate: mockAggregate,
   listSearchIndexes: mockListSearchIndexes,
   createIndex: mockCreateIndex,
 } as unknown as Collection;
+
+// Helper: flatten all bulkWrite ops across calls into their $set documents.
+function storedDocsFromBulkWrite() {
+  return mockBulkWrite.mock.calls
+    .flatMap((c) => c[0] as any[])
+    .map((op) => op.updateOne.update.$set);
+}
 
 const mockDb = {
   collection: vi.fn().mockReturnValue(mockCollection),
@@ -52,12 +61,23 @@ vi.mock('mongodb', () => ({
   MongoClient: vi.fn(() => mockMongoClient),
 }));
 
-// Mock OpenAI
+// Mock OpenAI — batch-aware: returns one item per input (string or string[]),
+// each with its `index` and an embedding whose first slot encodes the input
+// text length so tests can verify ordering/alignment.
+function embeddingDataFor(input: string | string[]) {
+  const inputs = Array.isArray(input) ? input : [input];
+  return inputs.map((text, index) => {
+    const embedding = Array(1536).fill(0.1);
+    embedding[0] = text.length;
+    return { index, embedding };
+  });
+}
+
 const mockOpenAI = {
   embeddings: {
-    create: vi.fn().mockResolvedValue({
-      data: [{ embedding: Array(1536).fill(0.1) }],
-    }),
+    create: vi.fn(async (params: { input: string | string[] }) => ({
+      data: embeddingDataFor(params.input),
+    })),
   },
 };
 
@@ -86,11 +106,13 @@ describe('DocsRAGPlugin', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mockFetch.mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        data: [{ embedding: Array(1536).fill(0.1) }],
-      }),
+    // Voyage mock — batch-aware: echoes one embedding per input text.
+    mockFetch.mockImplementation(async (_url: string, init: { body: string }) => {
+      const body = JSON.parse(init.body) as { input: string | string[] };
+      return {
+        ok: true,
+        json: async () => ({ data: embeddingDataFor(body.input) }),
+      };
     });
   });
 
@@ -282,7 +304,7 @@ describe('DocsRAGPlugin', () => {
       expect(result.success).toBe(true);
       expect(result.indexed).toBe(1);
       expect(result.failed).toBe(0);
-      expect(mockUpdateOne).toHaveBeenCalled();
+      expect(mockBulkWrite).toHaveBeenCalled();
     });
 
     it('should ingest multiple documents', async () => {
@@ -297,7 +319,7 @@ describe('DocsRAGPlugin', () => {
 
       expect(result.success).toBe(true);
       expect(result.indexed).toBe(3);
-      expect(mockUpdateOne.mock.calls.length).toBeGreaterThan(0);
+      expect(mockBulkWrite.mock.calls.length).toBeGreaterThan(0);
     });
 
     it('should split oversized paragraph chunks (PDF-style text without blank lines)', async () => {
@@ -311,7 +333,8 @@ describe('DocsRAGPlugin', () => {
       const result = await plugin.ingest([{ id: 'doc1', content: big }], { agentId: 'agent-1' });
       expect(result.success).toBe(true);
       expect(result.metadata?.totalChunks).toBeGreaterThan(1);
-      expect(mockUpdateOne.mock.calls.length).toBeGreaterThan(1);
+      // One bulkWrite for the document, carrying one op per chunk.
+      expect(storedDocsFromBulkWrite().length).toBeGreaterThan(1);
     });
 
     it('should include metadata in result', async () => {
@@ -346,8 +369,7 @@ describe('DocsRAGPlugin', () => {
         { agentId: 'agent-1' }
       );
 
-      const call = mockUpdateOne.mock.calls[0];
-      const document = call[1].$set;
+      const document = storedDocsFromBulkWrite()[0];
       expect(document.metadata.title).toBe('Test Doc');
       expect(document.metadata.author).toBe('John');
     });
@@ -365,6 +387,74 @@ describe('DocsRAGPlugin', () => {
       expect(result.success).toBe(false);
       expect(result.failed).toBe(1);
       expect(result.errors?.[0].error).toContain('API error');
+    });
+  });
+
+  // ============================================================================
+  // Embedding Batching
+  // ============================================================================
+
+  describe('embedding batching', () => {
+    beforeEach(() => {
+      plugin = new DocsRAGPlugin(defaultConfig);
+    });
+
+    it('sends arrays of texts and batches requests (not one per chunk)', async () => {
+      const documents = Array.from({ length: 250 }, (_, i) => ({
+        id: `doc-${i}`,
+        content: `Content number ${i}`,
+      }));
+
+      const result = await plugin.ingest(documents, { agentId: 'agent-1' });
+
+      expect(result.success).toBe(true);
+      expect(result.indexed).toBe(250);
+
+      // 250 chunks / batchSize 100 => 3 requests, each with an array input.
+      expect(mockOpenAI.embeddings.create).toHaveBeenCalledTimes(3);
+      const sizes = mockOpenAI.embeddings.create.mock.calls.map(
+        (c) => (c[0].input as string[]).length
+      );
+      expect(sizes).toEqual([100, 100, 50]);
+      for (const c of mockOpenAI.embeddings.create.mock.calls) {
+        expect(Array.isArray(c[0].input)).toBe(true);
+      }
+    });
+
+    it('aligns each embedding with its own chunk', async () => {
+      const documents = Array.from({ length: 5 }, (_, i) => ({
+        id: `doc-${i}`,
+        content: 'x'.repeat(10 + i), // distinct lengths => distinct embedding[0]
+      }));
+
+      await plugin.ingest(documents, { agentId: 'agent-1' });
+
+      const stored = storedDocsFromBulkWrite();
+      expect(stored).toHaveLength(5);
+      for (const doc of stored) {
+        // mock encodes input length in embedding[0]
+        expect(doc.embedding[0]).toBe(doc.content.length);
+      }
+    });
+
+    it('batches Voyage requests with array input', async () => {
+      plugin = new DocsRAGPlugin({
+        ...defaultConfig,
+        embeddingProvider: 'voyage',
+      });
+
+      const documents = Array.from({ length: 3 }, (_, i) => ({
+        id: `doc-${i}`,
+        content: `Voyage content ${i}`,
+      }));
+
+      await plugin.ingest(documents, { agentId: 'agent-1' });
+
+      // 3 chunks < batchSize 100 => single Voyage request with an array input.
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(Array.isArray(body.input)).toBe(true);
+      expect(body.input).toHaveLength(3);
     });
   });
 
@@ -401,11 +491,10 @@ describe('DocsRAGPlugin', () => {
         );
 
         expect(result.metadata?.totalChunks).toBeGreaterThan(0);
-        
+
         // Verify code block was captured
-        const calls = mockUpdateOne.mock.calls;
-        const hasCodeChunk = calls.some((call: any) => 
-          call[1].$set.metadata.type === 'code'
+        const hasCodeChunk = storedDocsFromBulkWrite().some(
+          (doc: any) => doc.metadata.type === 'code'
         );
         expect(hasCodeChunk).toBe(true);
       });
@@ -598,7 +687,7 @@ describe('DocsRAGPlugin', () => {
       );
 
       expect(mockDeleteMany).toHaveBeenCalled();
-      expect(mockUpdateOne).toHaveBeenCalled();
+      expect(mockBulkWrite).toHaveBeenCalled();
     });
   });
 
@@ -871,7 +960,7 @@ describe('DocsRAGPlugin', () => {
   });
 
   describe('ingest progress callbacks', () => {
-    it('calls onIngestPlan once and onIngestProgress for embedding+stored per chunk (multi-doc)', async () => {
+    it('calls onIngestPlan once and reports stored progress reaching the full total', async () => {
       plugin = new DocsRAGPlugin({
         ...defaultConfig,
         chunkingStrategy: 'paragraph',
@@ -899,8 +988,10 @@ describe('DocsRAGPlugin', () => {
       const all = onIngestProgress.mock.calls.map((c) => c[0] as { phase: string; processedGlobal: number });
       const embedding = all.filter((e) => e.phase === 'embedding');
       const stored = all.filter((e) => e.phase === 'stored');
-      expect(embedding.length).toBe(plan.totalChunks);
-      expect(stored.length).toBe(plan.totalChunks);
+      // Embedding signalled once at the start; with the default macro-batch all
+      // chunks fit in one batch => one stored event reaching the full total.
+      expect(embedding.length).toBe(1);
+      expect(stored.length).toBeGreaterThanOrEqual(1);
       expect(stored[stored.length - 1].processedGlobal).toBe(plan.totalChunks);
 
       const last = stored[stored.length - 1] as {
@@ -912,6 +1003,32 @@ describe('DocsRAGPlugin', () => {
       expect(last.byDocument['doc-b'].chunksDone).toBe(
         plan.documents.find((d) => d.documentId === 'doc-b')!.chunkCount,
       );
+    });
+
+    it('reports stored progress incrementally across macro-batches (live progress)', async () => {
+      // macro-batch = embeddingBatchSize * embeddingConcurrency = 1 => one
+      // stored event per chunk, so we can assert the counter climbs gradually.
+      plugin = new DocsRAGPlugin({
+        ...defaultConfig,
+        embeddingBatchSize: 1,
+        embeddingConcurrency: 1,
+      });
+      const onIngestProgress = vi.fn();
+
+      const documents = Array.from({ length: 5 }, (_, i) => ({
+        id: `doc-${i}`,
+        content: `Content ${i}`,
+      }));
+
+      await plugin.ingest(documents, { agentId: 'agent-1', onIngestProgress });
+
+      const stored = onIngestProgress.mock.calls
+        .map((c) => c[0] as { phase: string; processedGlobal: number })
+        .filter((e) => e.phase === 'stored');
+
+      // One stored event per macro-batch (5), with a strictly climbing counter.
+      expect(stored.length).toBe(5);
+      expect(stored.map((e) => e.processedGlobal)).toEqual([1, 2, 3, 4, 5]);
     });
 
     it('does not invoke onIngestPlan when not provided', async () => {

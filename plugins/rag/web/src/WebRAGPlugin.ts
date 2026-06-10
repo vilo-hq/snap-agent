@@ -31,6 +31,7 @@ import {
   extractPageFromHtml,
   urlToDocumentId,
 } from './htmlPageExtract';
+import { runWithConcurrency } from './concurrency';
 
 import type {
   WebRAGConfig,
@@ -111,6 +112,8 @@ export class WebRAGPlugin implements RAGPlugin {
       filterableFields: ['type'],
       maxChunkSize: 1500,
       chunkOverlap: 200,
+      embeddingBatchSize: 100,
+      embeddingConcurrency: 4,
       ...config,
     };
     this.priority = config.priority ?? 100;
@@ -537,28 +540,92 @@ export class WebRAGPlugin implements RAGPlugin {
     const embedding = response.data[0].embedding;
 
     // Cache result
-    if (cacheConfig?.enabled) {
-      const maxSize = cacheConfig.maxSize ?? 1000;
-      if (this.embeddingCache.size >= maxSize) {
-        // Remove oldest entry
-        const firstKey = this.embeddingCache.keys().next().value;
-        if (firstKey) this.embeddingCache.delete(firstKey);
-      }
-      this.embeddingCache.set(text, { value: embedding, timestamp: Date.now() });
-    }
+    this.storeEmbeddingInCache(text, embedding);
 
     return embedding;
   }
 
-  private async generateEmbeddingsBatch(texts: string[]): Promise<number[][]> {
-    const embeddings: number[][] = [];
+  /** Store an embedding in the LRU-ish in-memory cache (no-op if caching disabled). */
+  private storeEmbeddingInCache(text: string, embedding: number[]): void {
+    const cacheConfig = this.config.cache?.embeddings;
+    if (!cacheConfig?.enabled) return;
+    const maxSize = cacheConfig.maxSize ?? 1000;
+    if (this.embeddingCache.size >= maxSize) {
+      // Remove oldest entry
+      const firstKey = this.embeddingCache.keys().next().value;
+      if (firstKey) this.embeddingCache.delete(firstKey);
+    }
+    this.embeddingCache.set(text, { value: embedding, timestamp: Date.now() });
+  }
 
-    for (const text of texts) {
-      const embedding = await this.generateEmbedding(text);
-      embeddings.push(embedding);
+  /**
+   * Embed many texts using true API batching + bounded concurrency.
+   * Sends arrays of up to `embeddingBatchSize` texts per request and runs
+   * up to `embeddingConcurrency` requests in parallel. Cache hits are resolved
+   * up front and duplicate texts are embedded only once.
+   * Returns embeddings aligned 1:1 with the input order.
+   */
+  private async generateEmbeddingsBatch(texts: string[]): Promise<number[][]> {
+    const results = new Array<number[]>(texts.length);
+    const cacheConfig = this.config.cache?.embeddings;
+    const ttl = cacheConfig?.ttl ?? 3600000;
+
+    // Resolve cache hits; group remaining misses by unique text.
+    const missTextToIndices = new Map<string, number[]>();
+    for (let i = 0; i < texts.length; i++) {
+      const text = texts[i];
+      if (cacheConfig?.enabled) {
+        const cached = this.embeddingCache.get(text);
+        if (cached && Date.now() - cached.timestamp < ttl) {
+          this.cacheStats.hits++;
+          results[i] = cached.value;
+          continue;
+        }
+      }
+      this.cacheStats.misses++;
+      const existing = missTextToIndices.get(text);
+      if (existing) existing.push(i);
+      else missTextToIndices.set(text, [i]);
     }
 
-    return embeddings;
+    const missTexts = [...missTextToIndices.keys()];
+    if (missTexts.length === 0) return results;
+
+    const batchSize = Math.max(1, this.config.embeddingBatchSize ?? 100);
+    const concurrency = Math.max(1, this.config.embeddingConcurrency ?? 4);
+
+    const subBatches: string[][] = [];
+    for (let i = 0; i < missTexts.length; i += batchSize) {
+      subBatches.push(missTexts.slice(i, i + batchSize));
+    }
+
+    const jobs = subBatches.map((batch) => async (): Promise<number[][]> => {
+      const response = await this.openai.embeddings.create({
+        model: this.config.embeddingModel!,
+        input: batch,
+      });
+      // OpenAI returns one item per input; sort by index to be safe.
+      return [...response.data]
+        .sort((a, b) => a.index - b.index)
+        .map((d) => d.embedding);
+    });
+
+    const batchResults = await runWithConcurrency(jobs, concurrency);
+
+    for (let b = 0; b < subBatches.length; b++) {
+      const batch = subBatches[b];
+      const embeddings = batchResults[b];
+      for (let j = 0; j < batch.length; j++) {
+        const text = batch[j];
+        const embedding = embeddings[j];
+        for (const idx of missTextToIndices.get(text)!) {
+          results[idx] = embedding;
+        }
+        this.storeEmbeddingInCache(text, embedding);
+      }
+    }
+
+    return results;
   }
 
   // ============================================================================
@@ -653,74 +720,125 @@ export class WebRAGPlugin implements RAGPlugin {
       );
     }
 
+    const failedDocIds = new Set<string>();
+    const markFailed = (docId: string, error: unknown) => {
+      if (failedDocIds.has(docId)) return;
+      failedDocIds.add(docId);
+      errors.push({
+        id: docId,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
+    };
+
+    // Flatten every chunk across all documents into a single work list so we can
+    // embed them in batched, concurrent requests instead of one call per chunk.
+    type FlatChunk = { docId: string; docIndex: number; storedDoc: any; content: string };
+    const flat: FlatChunk[] = [];
+
     for (let docIndex = 0; docIndex < documents.length; docIndex++) {
       const doc = documents[docIndex];
       const chunks = chunkPlan[docIndex]!;
-      try {
-        const isChunked = chunks.length > 1;
+      const isChunked = chunks.length > 1;
 
-        // Remove any previous chunks for this document before re-ingesting
-        if (isChunked) {
+      // Remove any previous chunks for this document before re-ingesting
+      if (isChunked) {
+        try {
           await collection.deleteMany({
             tenantId: this.config.tenantId,
             documentId: doc.id,
             agentId,
           });
+        } catch (error) {
+          markFailed(doc.id, error);
+          continue;
+        }
+      }
+
+      for (let i = 0; i < chunks.length; i++) {
+        const chunkId = isChunked ? `chunk-${doc.id}-${i}` : doc.id;
+        const storedDoc: any = {
+          id: chunkId,
+          content: chunks[i],
+          metadata: {
+            type: doc.metadata?.type || 'content',
+            ...doc.metadata,
+          },
+          tenantId: this.config.tenantId,
+          agentId,
+        };
+
+        if (isChunked) {
+          storedDoc.documentId = doc.id;
+          storedDoc.chunkIndex = i;
         }
 
-        for (let i = 0; i < chunks.length; i++) {
-          const chunkId = isChunked ? `chunk-${doc.id}-${i}` : doc.id;
-          const embedding = await this.generateEmbedding(chunks[i]);
-
-          const storedDoc: any = {
-            id: chunkId,
-            content: chunks[i],
-            metadata: {
-              type: doc.metadata?.type || 'content',
-              ...doc.metadata,
-            },
-            tenantId: this.config.tenantId,
-            agentId,
-            embedding,
-          };
-
-          if (isChunked) {
-            storedDoc.documentId = doc.id;
-            storedDoc.chunkIndex = i;
-          }
-
-          await collection.updateOne(
-            { tenantId: this.config.tenantId, id: chunkId, agentId },
-            {
-              $set: { ...storedDoc, updatedAt: new Date() },
-              $setOnInsert: { createdAt: new Date() },
-            },
-            { upsert: true }
-          );
-
-          chunksProcessed++;
-          if (onCrawlProgress) {
-            this.emitCrawlProgress(
-              { metadata: options?.metadata },
-              {
-                phase: 'indexing',
-                urlsScheduled: indexingTotal,
-                pagesProcessed: docIndex + (i + 1 === chunks.length ? 1 : 0),
-                chunksTotal,
-                chunksProcessed,
-              },
-            );
-          }
-        }
-
-        indexed++;
-      } catch (error) {
-        errors.push({
-          id: doc.id,
-          error: error instanceof Error ? error.message : 'Unknown error',
-        });
+        flat.push({ docId: doc.id, docIndex, storedDoc, content: chunks[i] });
       }
     }
+
+    // Process in macro-batches: embed AND persist each batch before moving on,
+    // so crawl progress advances incrementally during the (slow) embedding work
+    // instead of staying frozen until every embedding finishes and then jumping.
+    const processedDocs = new Set<number>();
+    const macroSize = Math.max(
+      1,
+      (this.config.embeddingBatchSize ?? 100) * (this.config.embeddingConcurrency ?? 4)
+    );
+
+    for (let start = 0; start < flat.length; start += macroSize) {
+      const slice = flat
+        .slice(start, start + macroSize)
+        .filter((f) => !failedDocIds.has(f.docId));
+      if (slice.length === 0) continue;
+
+      // Embed this macro-batch (internally split into concurrent sub-batches).
+      let embeddings: number[][];
+      try {
+        embeddings = await this.generateEmbeddingsBatch(slice.map((f) => f.content));
+      } catch (error) {
+        for (const f of slice) markFailed(f.docId, error);
+        continue;
+      }
+
+      // Persist this macro-batch with a single bulkWrite.
+      const ops = slice.map((f, i) => {
+        f.storedDoc.embedding = embeddings[i];
+        return {
+          updateOne: {
+            filter: { tenantId: this.config.tenantId, id: f.storedDoc.id, agentId },
+            update: {
+              $set: { ...f.storedDoc, updatedAt: new Date() },
+              $setOnInsert: { createdAt: new Date() },
+            },
+            upsert: true,
+          },
+        };
+      });
+
+      try {
+        await collection.bulkWrite(ops as any);
+      } catch (error) {
+        for (const f of slice) markFailed(f.docId, error);
+        continue;
+      }
+
+      chunksProcessed += slice.length;
+      for (const f of slice) processedDocs.add(f.docIndex);
+      if (onCrawlProgress) {
+        this.emitCrawlProgress(
+          { metadata: options?.metadata },
+          {
+            phase: 'indexing',
+            urlsScheduled: indexingTotal,
+            pagesProcessed: processedDocs.size,
+            chunksTotal,
+            chunksProcessed,
+          },
+        );
+      }
+    }
+
+    indexed = documents.length - failedDocIds.size;
 
     return {
       success: errors.length === 0,
