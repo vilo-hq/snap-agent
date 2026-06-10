@@ -1949,5 +1949,88 @@ describe('WebRAGPlugin', () => {
       expect(result.success).toBe(true);
     });
   });
+
+  describe('crawl optimizations (browser pool + retries)', () => {
+    beforeEach(() => {
+      mockFetch.mockReset();
+      // Make backoff waits instant so retry tests don't actually sleep.
+      vi.spyOn(plugin as any, 'delay').mockResolvedValue(undefined);
+    });
+
+    it('retries a transient 503 and then succeeds', async () => {
+      const html = `<html><body><article>${'retry content '.repeat(20)}</article></body></html>`;
+      mockFetch
+        .mockResolvedValueOnce({ ok: false, status: 503, headers: { get: () => null } })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          headers: { get: (h: string) => (h === 'content-type' ? 'text/html' : null) },
+          text: async () => html,
+        });
+
+      const result = await plugin.ingestFromUrls(
+        ['https://example.com/p'],
+        { renderOptions: { minContentLength: 50 } },
+      );
+
+      expect(mockFetch).toHaveBeenCalledTimes(2); // 1 failed + 1 retry
+      expect(result.urlsCrawled).toBe(1);
+    });
+
+    it('does not retry a non-transient 404', async () => {
+      mockFetch.mockResolvedValue({ ok: false, status: 404, headers: { get: () => null } });
+
+      const result = await plugin.ingestFromUrls(['https://example.com/missing']);
+
+      expect(mockFetch).toHaveBeenCalledTimes(1); // no retry on 404
+      expect(result.urlsFailed).toBe(1);
+    });
+
+    it('stops after maxRetries when the failure persists', async () => {
+      mockFetch.mockResolvedValue({ ok: false, status: 503, headers: { get: () => null } });
+
+      const result = await plugin.ingestFromUrls(
+        ['https://example.com/down'],
+        { maxRetries: 1 },
+      );
+
+      expect(mockFetch).toHaveBeenCalledTimes(2); // initial attempt + 1 retry
+      expect(result.urlsCrawled).toBe(0); // persistent 503 => not crawled
+    });
+
+    it('reuses a single browser across rendered pages', async () => {
+      const fakePage = {
+        goto: vi.fn().mockResolvedValue(undefined),
+        waitForSelector: vi.fn().mockResolvedValue(undefined),
+        waitForTimeout: vi.fn().mockResolvedValue(undefined),
+        evaluate: vi.fn().mockResolvedValue(0),
+        content: vi.fn().mockResolvedValue(
+          `<html><body><article>${'rendered body '.repeat(30)}</article></body></html>`,
+        ),
+      };
+      const fakeContext = {
+        newPage: vi.fn().mockResolvedValue(fakePage),
+        close: vi.fn().mockResolvedValue(undefined),
+      };
+      const fakeBrowser = {
+        newContext: vi.fn().mockResolvedValue(fakeContext),
+        close: vi.fn().mockResolvedValue(undefined),
+      };
+      const launchSpy = vi
+        .spyOn(plugin as any, 'launchBrowser')
+        .mockResolvedValue(fakeBrowser);
+
+      const result = await plugin.ingestFromUrls(
+        ['https://example.com/a', 'https://example.com/b', 'https://example.com/c'],
+        { render: true, concurrency: 3, renderOptions: { minContentLength: 50 } },
+      );
+
+      expect(launchSpy).toHaveBeenCalledTimes(1); // ONE browser for all pages
+      expect(fakeBrowser.newContext).toHaveBeenCalledTimes(3); // one context per page
+      expect(fakeContext.close).toHaveBeenCalledTimes(3); // each context closed
+      expect(fakeBrowser.close).toHaveBeenCalledTimes(1); // browser closed once at the end
+      expect(result.urlsCrawled).toBe(3);
+    });
+  });
 });
 

@@ -1808,6 +1808,7 @@ export class WebRAGPlugin implements RAGPlugin {
       concurrency,
       delayMs,
       timeout,
+      maxRetries: config.maxRetries,
       typeFromUrl: config.typeFromUrl,
       defaultType: config.defaultType ?? 'page',
       metadata: config.metadata,
@@ -2080,6 +2081,7 @@ export class WebRAGPlugin implements RAGPlugin {
       concurrency: config.concurrency ?? 3,
       delayMs: config.delayMs ?? 500,
       timeout: config.timeout ?? 30000,
+      maxRetries: config.maxRetries,
       typeFromUrl: config.typeFromUrl,
       defaultType: config.type || 'page',
       metadata: config.metadata,
@@ -2121,6 +2123,7 @@ export class WebRAGPlugin implements RAGPlugin {
       concurrency: 1,
       delayMs: 0,
       timeout: config.timeout ?? 30000,
+      maxRetries: config.maxRetries,
       typeFromUrl: config.typeFromUrl,
       defaultType: config.type || 'page',
       metadata: config.metadata,
@@ -2143,6 +2146,7 @@ export class WebRAGPlugin implements RAGPlugin {
     const concurrency = config.concurrency ?? 3;
     const delayMs = config.delayMs ?? 500;
     const timeout = config.timeout ?? 30000;
+    const maxRetries = config.maxRetries ?? 2;
     const renderMode = config.render ?? false;
     const renderOptions: RenderOptions = config.renderOptions || {};
     const minContentLength = renderOptions.minContentLength ?? 200;
@@ -2182,6 +2186,20 @@ export class WebRAGPlugin implements RAGPlugin {
     const pageStatuses: CrawlPageStatusEntry[] = [];
     const maxStatuses = ledgerOpts?.maxPageStatuses ?? 500;
 
+    // Lazily launch ONE browser per crawl (only if rendering may be needed) and
+    // reuse it across every page, instead of launching Chromium per page.
+    const willRender = renderMode === true || renderMode === 'auto';
+    // Holder object (not a bare `let`) so TS keeps the type through the
+    // getBrowser closure mutation and the finally block below.
+    const browserRef: { current: Promise<any> | null } = { current: null };
+    const getBrowser = willRender
+      ? () => {
+          if (!browserRef.current) browserRef.current = this.launchBrowser(dbg);
+          return browserRef.current;
+        }
+      : undefined;
+
+    try {
     // Process URLs in batches for concurrency control
     for (let i = 0; i < uniqueUrls.length; i += concurrency) {
       const batch = uniqueUrls.slice(i, i + concurrency);
@@ -2236,6 +2254,8 @@ export class WebRAGPlugin implements RAGPlugin {
               renderOptions,
               minContentLength,
               dbg,
+              getBrowser,
+              maxRetries,
             });
             if (diag?.modeUsed === 'static_ok') counters.staticOk++;
             if (diag?.modeUsed === 'render_ok') counters.renderOk++;
@@ -2363,6 +2383,15 @@ export class WebRAGPlugin implements RAGPlugin {
         debug: dbg.summary(),
       },
     };
+    } finally {
+      // Close the shared browser once the whole crawl is done.
+      if (browserRef.current) {
+        const b = await browserRef.current.catch(() => null);
+        if (b) {
+          try { await b.close(); } catch { /* ignore */ }
+        }
+      }
+    }
   }
 
   /**
@@ -2511,6 +2540,8 @@ export class WebRAGPlugin implements RAGPlugin {
       renderOptions: RenderOptions;
       minContentLength: number;
       dbg: ReturnType<WebRAGPlugin['createDebugCollector']>;
+      getBrowser?: () => Promise<any>;
+      maxRetries?: number;
     }
   ): Promise<{
     doc: RAGDocument | null;
@@ -2520,7 +2551,7 @@ export class WebRAGPlugin implements RAGPlugin {
   }> {
     if (ctx.renderMode === true) {
       const { doc, bodyTextLengthHint, renderFailure, blockedSuspected, links } =
-        await this.crawlPageRendered(url, config, timeout, ctx.renderOptions, ctx.dbg);
+        await this.crawlPageRendered(url, config, timeout, ctx.renderOptions, ctx.dbg, ctx.getBrowser);
       return this.diagFromRenderedAttempt(
         doc,
         bodyTextLengthHint,
@@ -2534,13 +2565,17 @@ export class WebRAGPlugin implements RAGPlugin {
 
     // Try static first
     try {
-      const response = await fetch(url, {
-        headers: {
-          'User-Agent': 'SnapAgent-CMS-Crawler/1.0',
-          'Accept': 'text/html,application/xhtml+xml',
+      const response = await this.fetchWithRetry(
+        url,
+        {
+          headers: {
+            'User-Agent': 'SnapAgent-CMS-Crawler/1.0',
+            'Accept': 'text/html,application/xhtml+xml',
+          },
         },
-        signal: AbortSignal.timeout(timeout),
-      });
+        { timeout, maxRetries: ctx.maxRetries },
+        ctx.dbg
+      );
 
       if (!response.ok) {
         // Heuristic: anti-bot pages often return 403/429/503
@@ -2582,7 +2617,7 @@ export class WebRAGPlugin implements RAGPlugin {
             blockedSuspected,
             links: renderedLinks,
           } = await this.crawlPageRendered(
-            url, config, timeout, ctx.renderOptions, ctx.dbg
+            url, config, timeout, ctx.renderOptions, ctx.dbg, ctx.getBrowser
           );
           const mergedHint = rHint ?? staticHint;
           const fb = this.diagFromRenderedAttempt(
@@ -2614,12 +2649,32 @@ export class WebRAGPlugin implements RAGPlugin {
     }
   }
 
+  /**
+   * Launch a headless Chromium browser via the optional `playwright` dependency.
+   * Throws a clear error if playwright is not installed.
+   */
+  private async launchBrowser(
+    dbg: ReturnType<WebRAGPlugin['createDebugCollector']>
+  ): Promise<any> {
+    let playwright: any;
+    try {
+      // Avoid static TS module resolution (playwright is optional at runtime)
+      // eslint-disable-next-line no-new-func
+      playwright = await (Function('return import("playwright")')() as Promise<any>);
+    } catch (e) {
+      dbg.log('render.missingDependency', { error: 'playwright_not_installed' });
+      throw new Error('playwright is not installed. Add it to dependencies to use rendering.');
+    }
+    return playwright.chromium.launch({ headless: true });
+  }
+
   private async crawlPageRendered(
     url: string,
     config: SitemapConfig,
     timeout: number,
     renderOptions: RenderOptions,
-    dbg: ReturnType<WebRAGPlugin['createDebugCollector']>
+    dbg: ReturnType<WebRAGPlugin['createDebugCollector']>,
+    getBrowser?: () => Promise<any>
   ): Promise<{
     doc: RAGDocument | null;
     bodyTextLengthHint: number;
@@ -2627,16 +2682,6 @@ export class WebRAGPlugin implements RAGPlugin {
     blockedSuspected?: boolean;
     links?: string[];
   }> {
-    let playwright: any;
-    try {
-      // Avoid static TS module resolution (playwright is optional at runtime)
-      // eslint-disable-next-line no-new-func
-      playwright = await (Function('return import("playwright")')() as Promise<any>);
-    } catch (e) {
-      dbg.log('render.missingDependency', { url, error: 'playwright_not_installed' });
-      throw new Error('playwright is not installed. Add it to dependencies to use crawlPageRendered().');
-    }
-
     const waitUntil = renderOptions.waitUntil || 'domcontentloaded';
     const waitForSelector = renderOptions.waitForSelector;
     const scrollCfg = renderOptions.scroll || {};
@@ -2646,9 +2691,21 @@ export class WebRAGPlugin implements RAGPlugin {
     const stableIterations = scrollCfg.stableIterations ?? 2;
     const postRenderDelayMs = renderOptions.postRenderDelayMs ?? 0;
 
-    const browser = await playwright.chromium.launch({ headless: true });
+    // Reuse a shared browser when provided (one per crawl); otherwise launch a
+    // standalone one. Each page gets its own context for isolation; we only
+    // close the browser when we own it.
+    let browser: any;
+    let ownBrowser = false;
+    let context: any = null;
     try {
-      const page = await browser.newPage();
+      if (getBrowser) {
+        browser = await getBrowser();
+      } else {
+        browser = await this.launchBrowser(dbg);
+        ownBrowser = true;
+      }
+      context = await browser.newContext();
+      const page = await context.newPage();
       await page.goto(url, { waitUntil, timeout });
       if (waitForSelector) {
         await page.waitForSelector(waitForSelector, { timeout });
@@ -2703,7 +2760,12 @@ export class WebRAGPlugin implements RAGPlugin {
       dbg.log('render.error', { url, error: msg });
       return { doc: null, bodyTextLengthHint: 0, renderFailure: msg };
     } finally {
-      await browser.close();
+      if (context) {
+        try { await context.close(); } catch { /* ignore */ }
+      }
+      if (ownBrowser && browser) {
+        try { await browser.close(); } catch { /* ignore */ }
+      }
     }
   }
 
@@ -2820,6 +2882,72 @@ export class WebRAGPlugin implements RAGPlugin {
    */
   private delay(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  /** Exponential backoff with jitter, capped at 15s. */
+  private backoffMs(attempt: number): number {
+    const base = 500 * 2 ** attempt; // 500, 1000, 2000, ...
+    const jitter = base * 0.25 * Math.random();
+    return Math.min(base + jitter, 15000);
+  }
+
+  /** Wait derived from a Retry-After header when present, else exponential backoff. */
+  private retryDelayMs(response: Response, attempt: number): number {
+    const ra = response.headers.get('retry-after');
+    if (ra) {
+      const secs = Number(ra);
+      if (Number.isFinite(secs) && secs >= 0) return Math.min(secs * 1000, 30000);
+    }
+    return this.backoffMs(attempt);
+  }
+
+  /**
+   * fetch() with retries on transient failures (network/timeout errors and
+   * 429/503/5xx responses) using exponential backoff + jitter, honoring
+   * Retry-After. Non-retryable responses (e.g. 403/404) are returned as-is.
+   */
+  private async fetchWithRetry(
+    url: string,
+    init: RequestInit,
+    opts: { timeout: number; maxRetries?: number },
+    dbg?: ReturnType<WebRAGPlugin['createDebugCollector']>
+  ): Promise<Response> {
+    const maxRetries = Math.max(0, opts.maxRetries ?? 2);
+    let lastErr: unknown;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        const response = await fetch(url, {
+          ...init,
+          signal: AbortSignal.timeout(opts.timeout),
+        });
+
+        const transient =
+          response.status === 429 || response.status === 503 || response.status >= 500;
+        if (transient && attempt < maxRetries) {
+          const wait = this.retryDelayMs(response, attempt);
+          dbg?.log('crawl.retryStatus', { url, status: response.status, attempt, wait });
+          await this.delay(wait);
+          continue;
+        }
+        return response;
+      } catch (e) {
+        lastErr = e;
+        if (attempt < maxRetries) {
+          const wait = this.backoffMs(attempt);
+          dbg?.log('crawl.retryError', {
+            url,
+            attempt,
+            error: e instanceof Error ? e.message : String(e),
+          });
+          await this.delay(wait);
+          continue;
+        }
+        throw e;
+      }
+    }
+    // Unreachable (loop either returns or throws), but satisfies the type checker.
+    throw lastErr;
   }
 
   // ============================================================================

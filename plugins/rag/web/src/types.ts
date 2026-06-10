@@ -309,6 +309,7 @@ export interface SitemapConfig {
   concurrency?: number;     // Default: 3 (parallel requests)
   delayMs?: number;         // Default: 500 (delay between requests)
   timeout?: number;         // Default: 30000 (per page)
+  maxRetries?: number;      // Default: 2 (retries on 429/503/5xx/network errors)
 
   // Content extraction
   contentSelector?: string;  // CSS selector for main content (e.g., 'article', '.content')
@@ -370,6 +371,7 @@ export interface UrlListConfig {
   concurrency?: number;  // Default: 3
   delayMs?: number;      // Default: 500
   timeout?: number;      // Default: 30000
+  maxRetries?: number;   // Default: 2 (retries on 429/503/5xx/network errors)
 
   // Type inference or static type
   type?: string;  // Static type for all URLs
@@ -404,6 +406,7 @@ export interface SinglePageConfig {
 
   // Crawling settings
   timeout?: number; // Default: 30000
+  maxRetries?: number; // Default: 2 (retries on 429/503/5xx/network errors)
 
   // Type inference or static type
   type?: string; // Static type for this URL (default: 'page')
@@ -437,6 +440,7 @@ export interface WebsiteCrawlConfig {
   concurrency?: number;     // Default: 3
   delayMs?: number;         // Default: 500 (delay between discovery batches and crawl batches)
   timeout?: number;         // Default: 30000
+  maxRetries?: number;      // Default: 2 (retries on 429/503/5xx/network errors)
 
   // URL filtering
   includePatterns?: string[];  // Only include URLs matching these patterns
