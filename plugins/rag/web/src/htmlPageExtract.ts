@@ -1,5 +1,6 @@
 import * as cheerio from 'cheerio';
 import { extractProductMetadata } from './productMetadata';
+import { extractVariants, type VariantMetadata } from './variantMetadata';
 import { resolvePageCardMetadata } from './pageCardMetadata';
 
 const DEFAULT_CONTENT_SELECTOR =
@@ -40,6 +41,19 @@ export interface HtmlPageExtractOptions {
   typeFromUrl?: Record<string, string>;
   minExtractedContentLength?: number;
   metadata?: Record<string, unknown>;
+  /**
+   * Extract variant colors/sizes (default true) into metadata and append a "Colores/Tallas" line to
+   * the indexed content so color/size become searchable. Set false for non-product sites.
+   */
+  extractVariantMetadata?: boolean;
+}
+
+/** Append the available colors/sizes to indexed content so they're searchable (bilingual label). */
+function formatVariantLine(v: VariantMetadata): string {
+  const parts: string[] = [];
+  if (v.colors.length > 0) parts.push(`Colores disponibles / available colors: ${v.colors.join(', ')}.`);
+  if (v.sizes.length > 0) parts.push(`Tallas disponibles / available sizes: ${v.sizes.join(', ')}.`);
+  return parts.join(' ');
 }
 
 export interface HtmlPageExtractResult {
@@ -98,9 +112,15 @@ export function extractPageFromHtml(
     title = h1Title || docTitle;
   }
 
-  const content = extractBestContentText($, options);
+  const baseContent = extractBestContentText($, options);
+  // Variants are read from the FULL html (not the noise-stripped DOM), since swatch widgets are
+  // often inside stripped <form>s. Appending them keeps color/size searchable.
+  const variants: VariantMetadata =
+    options.extractVariantMetadata === false ? { colors: [], sizes: [] } : extractVariants(html);
+  const variantLine = formatVariantLine(variants);
+  const content = variantLine ? `${baseContent}\n\n${variantLine}` : baseContent;
   const minChars = options.minExtractedContentLength ?? 50;
-  const indexable = Boolean(content && content.length >= minChars);
+  const indexable = Boolean(baseContent && baseContent.length >= minChars);
 
   const image =
     $('meta[property="og:image"]').attr('content') ||
@@ -162,6 +182,8 @@ export function extractPageFromHtml(
     ...(productMeta.price != null ? { price: productMeta.price } : {}),
     ...(productMeta.currency ? { currency: productMeta.currency } : {}),
     ...(productMeta.availability ? { availability: productMeta.availability } : {}),
+    ...(variants.colors.length > 0 ? { colors: variants.colors } : {}),
+    ...(variants.sizes.length > 0 ? { sizes: variants.sizes } : {}),
     ...options.metadata,
   };
 
