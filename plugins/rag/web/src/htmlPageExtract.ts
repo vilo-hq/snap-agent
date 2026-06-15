@@ -116,7 +116,7 @@ export function extractPageFromHtml(
   // Variants are read from the FULL html (not the noise-stripped DOM), since swatch widgets are
   // often inside stripped <form>s. Appending them keeps color/size searchable.
   const variants: VariantMetadata =
-    options.extractVariantMetadata === false ? { colors: [], sizes: [] } : extractVariants(html);
+    options.extractVariantMetadata === false ? { colors: [], sizes: [] } : extractVariants(html, url);
   const variantLine = formatVariantLine(variants);
   const content = variantLine ? `${baseContent}\n\n${variantLine}` : baseContent;
   const minChars = options.minExtractedContentLength ?? 50;
@@ -184,6 +184,10 @@ export function extractPageFromHtml(
     ...(productMeta.availability ? { availability: productMeta.availability } : {}),
     ...(variants.colors.length > 0 ? { colors: variants.colors } : {}),
     ...(variants.sizes.length > 0 ? { sizes: variants.sizes } : {}),
+    ...(variants.colorImages && Object.keys(variants.colorImages).length > 0
+      ? { colorImages: variants.colorImages }
+      : {}),
+    ...(variants.platform ? { storefrontPlatform: variants.platform } : {}),
     ...options.metadata,
   };
 

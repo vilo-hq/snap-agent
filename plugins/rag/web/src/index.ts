@@ -7,6 +7,8 @@ export {
 export type { HtmlPageExtractOptions, HtmlPageExtractResult } from './htmlPageExtract';
 export { extractProductMetadata, parsePrice, normalizeCurrency, normalizeAvailability } from './productMetadata';
 export type { ProductMetadata } from './productMetadata';
+export { extractVariants } from './storefront';
+export type { VariantMetadata, StorefrontExtractor, StorefrontVariants } from './storefront';
 export {
   resolvePageCardMetadata,
   hardExcludePage,

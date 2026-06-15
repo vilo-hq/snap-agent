@@ -416,6 +416,8 @@ export class WebRAGPlugin implements RAGPlugin {
           ...(doc.metadata.price != null ? { price: doc.metadata.price } : {}),
           ...(doc.metadata.currency ? { currency: doc.metadata.currency } : {}),
           ...(doc.metadata.availability ? { availability: doc.metadata.availability } : {}),
+          ...(doc.metadata.colors ? { colors: doc.metadata.colors } : {}),
+          ...(doc.metadata.colorImages ? { colorImages: doc.metadata.colorImages } : {}),
           score: doc.score,
         })),
       },
