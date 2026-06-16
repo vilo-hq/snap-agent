@@ -11,6 +11,17 @@ describe('storefront framework — auto-detection + platform tag', () => {
     expect(v.colors).toEqual(expect.arrayContaining(['Rojo', 'Azul']));
   });
 
+  it('does not mis-tag the neckline word "redondo" as a color (red-stem collision)', () => {
+    const html = `<html><body>
+      <div class="product-colors"><span class="label-color">Gris</span></div>
+      <img alt="Camiseta básica cuello redondo manga corta" />
+    </body></html>`;
+    const v = extractVariants(html);
+    const lc = v.colors.map((c) => c.toLowerCase());
+    expect(lc).toContain('gris');
+    expect(lc).not.toContain('redondo'); // "red" prefix must not match "redondo"
+  });
+
   it('captures per-color images from schema.org ProductGroup variants', () => {
     const html = `<html><head>
       <script type="application/ld+json">{"@type":"ProductGroup","hasVariant":[

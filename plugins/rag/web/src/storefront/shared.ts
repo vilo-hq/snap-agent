@@ -10,17 +10,27 @@ import * as cheerio from 'cheerio';
 
 export const MAX_VALUES = 24;
 
-/** Color stems (es/en/pt/fr/it/de common). Used to validate unlabeled heuristic text. */
+/**
+ * Color stems (es/en/pt/fr/it/de common), matched as PREFIXES of the candidate word
+ * ("verd" → verde/verdes). Used to validate unlabeled heuristic text.
+ *
+ * Short English/German color words that are also prefixes of unrelated words must NOT live here —
+ * e.g. "red" would prefix-match "redondo" (round neck), "rot" matches "roto" (torn), "tan" matches
+ * "tanto". Those go in COLOR_EXACT (whole-word match only). See isColorLike.
+ */
 export const COLOR_STEMS = [
   'verd', 'azul', 'roj', 'negr', 'blanc', 'gris', 'amarill', 'naranj', 'morad', 'violet', 'lila',
   'ros', 'marron', 'beige', 'crud', 'crema', 'celest', 'turques', 'dorad', 'plate', 'plata',
   'granate', 'burdeos', 'caqui', 'coral', 'fucsia', 'menta', 'salmon', 'camel', 'mostaza', 'teja',
   'vino', 'nude', 'topo', 'arena', 'oliva', 'marino', 'antracita', 'tostado',
-  'green', 'blue', 'red', 'black', 'white', 'gray', 'grey', 'yellow', 'orange', 'purple', 'pink',
-  'brown', 'beige', 'teal', 'navy', 'gold', 'silver', 'maroon', 'khaki', 'cream', 'ivory', 'tan',
+  'green', 'blue', 'black', 'white', 'gray', 'grey', 'yellow', 'orange', 'purple', 'pink',
+  'brown', 'beige', 'teal', 'navy', 'gold', 'silver', 'maroon', 'khaki', 'cream', 'ivory',
   'preto', 'branco', 'vermelh', 'amarel', 'cinza', 'verde', 'rouge', 'noir', 'blanc', 'vert',
-  'bleu', 'jaune', 'rosso', 'nero', 'bianco', 'verde', 'schwarz', 'weiss', 'blau', 'rot', 'grun',
+  'bleu', 'jaune', 'rosso', 'nero', 'bianco', 'verde', 'schwarz', 'weiss', 'blau', 'grun',
 ];
+
+/** Colors matched as a WHOLE word only (prefix-matching would collide with non-color words). */
+export const COLOR_EXACT = new Set(['red', 'tan', 'rot']);
 
 export const SIZE_RE = /^(?:x{0,3}[sl]|m|x{0,3}large|x{0,3}small|medium|talla\s*\w+|size\s*\w+|[úÚu]nica|one\s*size|t\.?\s*\d{1,3}|\d{1,3})$/i;
 
@@ -34,6 +44,8 @@ export function strip(text: string): string {
 
 export function isColorLike(value: string): boolean {
   const head = strip(value).split(/[\s/,-]+/)[0] ?? '';
+  if (!head) return false;
+  if (COLOR_EXACT.has(head)) return true;
   return COLOR_STEMS.some((stem) => head.startsWith(stem));
 }
 
