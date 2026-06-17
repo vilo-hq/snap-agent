@@ -118,7 +118,7 @@ export type ChunkingStrategy = 'paragraph' | 'sentence' | 'fixed' | 'markdown';
 
 type PlannedDocChunk = {
   content: string;
-  metadata: { type: 'text' | 'code' | 'heading'; section?: string; language?: string };
+  metadata: { type: 'text' | 'code' | 'heading'; section?: string; language?: string; [key: string]: any };
 };
 
 function buildIngestByDocumentSnapshot(
@@ -560,6 +560,11 @@ export class DocsRAGPlugin implements RAGPlugin {
       // Persist this macro-batch with a single bulkWrite.
       const ops = slice.map((f, i) => {
         const id = `chunk-${f.doc.id}-${f.chunkIndex}`;
+        // Drop the bulky `records` array from doc-level metadata so it is not
+        // duplicated into every stored chunk (the per-record metadata already
+        // lives in f.chunk.metadata).
+        const { records: _ignoredRecords, ...docMetadata } =
+          (f.doc.metadata ?? {}) as Record<string, any>;
         const storedChunk: Omit<StoredDocChunk, 'createdAt' | 'updatedAt'> = {
           id,
           documentId: f.doc.id,
@@ -567,7 +572,7 @@ export class DocsRAGPlugin implements RAGPlugin {
           content: f.chunk.content,
           embedding: embeddings[i],
           metadata: {
-            ...f.doc.metadata,
+            ...docMetadata,
             ...f.chunk.metadata,
           },
           tenantId: this.config.tenantId,
@@ -636,15 +641,23 @@ export class DocsRAGPlugin implements RAGPlugin {
   /**
    * Chunk a document based on configured strategy
    */
-  private chunkDocument(doc: RAGDocument): Array<{
-    content: string;
-    metadata: { type: 'text' | 'code' | 'heading'; section?: string; language?: string };
-  }> {
+  private chunkDocument(doc: RAGDocument): PlannedDocChunk[] {
     const content = doc.content;
-    const chunks: Array<{
-      content: string;
-      metadata: { type: 'text' | 'code' | 'heading'; section?: string; language?: string };
-    }> = [];
+
+    // Pre-built records (e.g. one row per chunk from a CSV/XLSX upload, each with
+    // its own card metadata). When present, use them verbatim instead of running
+    // the configured chunking strategy — this is what enables per-record cards.
+    const records = (doc.metadata as Record<string, any> | undefined)?.records;
+    if (Array.isArray(records)) {
+      return records
+        .filter((r) => r && typeof r.content === 'string')
+        .map((r) => ({
+          content: r.content as string,
+          // `type: 'text'` is the default; any `type` inside the record's own
+          // metadata (e.g. a mapped column) overrides it.
+          metadata: { type: 'text' as const, ...(r.metadata ?? {}) },
+        }));
+    }
 
     switch (this.config.chunkingStrategy) {
       case 'markdown':

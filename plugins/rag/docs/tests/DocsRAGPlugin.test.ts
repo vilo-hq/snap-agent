@@ -374,6 +374,46 @@ describe('DocsRAGPlugin', () => {
       expect(document.metadata.author).toBe('John');
     });
 
+    it('should create one chunk per pre-built record with its own metadata', async () => {
+      await plugin.ingest(
+        [
+          {
+            id: 'catalog.csv',
+            content: 'fallback content',
+            metadata: {
+              filename: 'catalog.csv',
+              records: [
+                {
+                  content: 'Red Shirt — a comfy red shirt',
+                  metadata: { title: 'Red Shirt', imageUrl: 'https://x/red.png', price: 20, url: 'https://x/red' },
+                },
+                {
+                  content: 'Blue Shirt — a cool blue shirt',
+                  metadata: { title: 'Blue Shirt', imageUrl: 'https://x/blue.png', price: 25, url: 'https://x/blue' },
+                },
+              ],
+            },
+          },
+        ],
+        { agentId: 'agent-1' }
+      );
+
+      const stored = storedDocsFromBulkWrite();
+      // One chunk per record (not re-chunked by strategy).
+      expect(stored).toHaveLength(2);
+      // Each chunk carries its own card metadata.
+      expect(stored[0].content).toContain('Red Shirt');
+      expect(stored[0].metadata.title).toBe('Red Shirt');
+      expect(stored[0].metadata.imageUrl).toBe('https://x/red.png');
+      expect(stored[0].metadata.price).toBe(20);
+      expect(stored[1].metadata.title).toBe('Blue Shirt');
+      expect(stored[1].metadata.price).toBe(25);
+      // The bulky `records` array is NOT duplicated into each stored chunk.
+      expect(stored[0].metadata.records).toBeUndefined();
+      // Doc-level metadata (filename) is still propagated.
+      expect(stored[0].metadata.filename).toBe('catalog.csv');
+    });
+
     it('should handle errors gracefully', async () => {
       mockOpenAI.embeddings.create.mockRejectedValueOnce(
         new Error('API error')
