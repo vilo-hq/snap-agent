@@ -35,3 +35,6 @@ yarn-error.log*
 coverage/
 .nyc_output/
 
+#Docs
+PR_DESCRIPTION.md
+
