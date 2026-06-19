@@ -316,6 +316,12 @@ export interface SitemapConfig {
   removeSelectors?: string[];  // Elements to remove (e.g., ['nav', 'footer', '.sidebar'])
   /** Minimum cleaned text length to accept a page (default: 50) */
   minExtractedContentLength?: number;
+  /**
+   * Extract product variant colors/sizes and fold them into the indexed content (default: true).
+   * Set false for non-ecommerce sites (blogs, docs, corporate) so prose/place words aren't tagged
+   * as product colors.
+   */
+  extractVariantMetadata?: boolean;
 
   // URL filtering
   includePatterns?: string[];  // Only crawl URLs matching these patterns
@@ -365,6 +371,8 @@ export interface UrlListConfig {
   contentSelector?: string;  // CSS selector for main content
   titleSelector?: string;    // CSS selector for title
   removeSelectors?: string[];  // Elements to remove
+  /** Extract product variant colors/sizes (default: true). Set false for non-ecommerce sites. */
+  extractVariantMetadata?: boolean;
 
   // Crawling settings
   concurrency?: number;  // Default: 3
@@ -401,6 +409,8 @@ export interface SinglePageConfig {
   contentSelector?: string;
   titleSelector?: string;
   removeSelectors?: string[];
+  /** Extract product variant colors/sizes (default: true). Set false for non-ecommerce sites. */
+  extractVariantMetadata?: boolean;
 
   // Crawling settings
   timeout?: number; // Default: 30000
@@ -449,6 +459,8 @@ export interface WebsiteCrawlConfig {
   contentSelector?: string;
   titleSelector?: string;
   removeSelectors?: string[];
+  /** Extract product variant colors/sizes (default: true). Set false for non-ecommerce sites. */
+  extractVariantMetadata?: boolean;
 
   // Type inference from URL
   typeFromUrl?: Record<string, string>;

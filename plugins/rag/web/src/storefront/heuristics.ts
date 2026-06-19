@@ -60,13 +60,9 @@ export function extractHeuristics($: CheerioRoot, scope: CheerioScope): Storefro
       });
   });
 
-  // Image alt/title often encodes the visible variant color ("… gris vista frontal").
-  scope.find('img[alt], img[title]').each((_, el) => {
-    const alt = $(el).attr('alt') || $(el).attr('title') || '';
-    for (const token of alt.split(/[\s,/-]+/)) {
-      if (token.length >= 3) pushColorIf(token);
-    }
-  });
+  // NB: we deliberately do NOT scan generic <img alt> / prose for color words — descriptive photo
+  // alt-text ("Black granite façade", "Camelback Mountain view") tagged content pages as products.
+  // Color must come from a real variant widget (swatch/select above) or structured data.
 
   // Sizes also live in plain swatch buttons (S/M/L/XL).
   scope.find('[class*="size" i] *, [class*="talla" i] *, [data-size]').each((_, el) => {

@@ -11,6 +11,22 @@ describe('storefront framework — auto-detection + platform tag', () => {
     expect(v.colors).toEqual(expect.arrayContaining(['Rojo', 'Azul']));
   });
 
+  it('extracts no colors from a non-product (content) page — no variant structure', () => {
+    // Architecture firm project page: color words in prose / img alt / a theme JSON token, but no
+    // product/variant structure. Must not be tagged as a product (the SmithGroup "Camelback" bug).
+    const html = `<html><head>
+      <script type="application/ld+json">{"@type":"WebPage","name":"Phoenix Office"}</script>
+      <script>window.theme = {"color":"black"};</script>
+      </head><body>
+      <h1>SmithGroup Phoenix Office</h1>
+      <p>A design drawing on the Sonoran Desert near Camelback Mountain, with black granite.</p>
+      <img alt="Black granite facade with Camelback Mountain view" src="x.jpg"/>
+    </body></html>`;
+    const v = extractVariants(html, 'https://smithgroup.com/projects/phoenix');
+    expect(v.colors).toEqual([]);
+    expect(v.platform).toBeUndefined();
+  });
+
   it('does not mis-tag the neckline word "redondo" as a color (red-stem collision)', () => {
     const html = `<html><body>
       <div class="product-colors"><span class="label-color">Gris</span></div>

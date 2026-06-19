@@ -21,16 +21,21 @@ export const MAX_VALUES = 24;
 export const COLOR_STEMS = [
   'verd', 'azul', 'roj', 'negr', 'blanc', 'gris', 'amarill', 'naranj', 'morad', 'violet', 'lila',
   'ros', 'marron', 'beige', 'crud', 'crema', 'celest', 'turques', 'dorad', 'plate', 'plata',
-  'granate', 'burdeos', 'caqui', 'coral', 'fucsia', 'menta', 'salmon', 'camel', 'mostaza', 'teja',
-  'vino', 'nude', 'topo', 'arena', 'oliva', 'marino', 'antracita', 'tostado',
+  'granate', 'burdeos', 'caqui', 'fucsia', 'salmon', 'mostaza', 'nude', 'marino', 'antracita', 'tostado',
   'green', 'blue', 'black', 'white', 'gray', 'grey', 'yellow', 'orange', 'purple', 'pink',
   'brown', 'beige', 'teal', 'navy', 'gold', 'silver', 'maroon', 'khaki', 'cream', 'ivory',
   'preto', 'branco', 'vermelh', 'amarel', 'cinza', 'verde', 'rouge', 'noir', 'blanc', 'vert',
   'bleu', 'jaune', 'rosso', 'nero', 'bianco', 'verde', 'schwarz', 'weiss', 'blau', 'grun',
 ];
 
-/** Colors matched as a WHOLE word only (prefix-matching would collide with non-color words). */
-export const COLOR_EXACT = new Set(['red', 'tan', 'rot']);
+/**
+ * Colors matched as a WHOLE word only — prefix-matching these collides with common/place words:
+ * red→redondo, tan→tanto, rot→roto, camel→Camelback, vino→vinoteca, topo→topografía,
+ * menta→mental, teja→tejado, oliva→olivar, arena→arenal, coral→coraline.
+ */
+export const COLOR_EXACT = new Set([
+  'red', 'tan', 'rot', 'camel', 'vino', 'topo', 'menta', 'teja', 'oliva', 'arena', 'coral',
+]);
 
 export const SIZE_RE = /^(?:x{0,3}[sl]|m|x{0,3}large|x{0,3}small|medium|talla\s*\w+|size\s*\w+|[úÚu]nica|one\s*size|t\.?\s*\d{1,3}|\d{1,3})$/i;
 

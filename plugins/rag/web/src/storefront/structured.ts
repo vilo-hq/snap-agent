@@ -1,7 +1,7 @@
 import type { StorefrontVariants } from './types';
 import {
   CheerioRoot, COLOR_GROUP_RE, SIZE_GROUP_RE, absoluteUrl, asArray, colorKey,
-  decodeEntities, isColorLike, jsonNodes, pushVal, strip,
+  decodeEntities, jsonNodes, pushVal, strip,
 } from './shared';
 
 /**
@@ -49,15 +49,19 @@ function collectFromJsonLd(
       return;
     }
     for (const node of jsonNodes(parsed)) {
-      pushVal(colors, node.color);
-      pushVal(sizes, node.size);
-      // additionalProperty: [{ name: 'Color', value: 'Gris' }, …]
-      for (const prop of asArray(node.additionalProperty)) {
-        if (!prop || typeof prop !== 'object') continue;
-        const p = prop as Record<string, unknown>;
-        const name = strip(String(p.name ?? ''));
-        if (COLOR_GROUP_RE.test(name)) pushVal(colors, p.value);
-        else if (SIZE_GROUP_RE.test(name)) pushVal(sizes, p.value);
+      // Only trust color/size on a Product-like node — otherwise we'd read a stray `color` off
+      // non-product JSON-LD (themes, breadcrumbs) on content sites.
+      if (isProductLikeNode(node)) {
+        pushVal(colors, node.color);
+        pushVal(sizes, node.size);
+        // additionalProperty: [{ name: 'Color', value: 'Gris' }, …]
+        for (const prop of asArray(node.additionalProperty)) {
+          if (!prop || typeof prop !== 'object') continue;
+          const p = prop as Record<string, unknown>;
+          const name = strip(String(p.name ?? ''));
+          if (COLOR_GROUP_RE.test(name)) pushVal(colors, p.value);
+          else if (SIZE_GROUP_RE.test(name)) pushVal(sizes, p.value);
+        }
       }
       // ProductGroup variants — capture per-variant image when the variant names a color.
       for (const v of [...asArray(node.hasVariant), ...asArray(node.model)]) {
@@ -76,6 +80,14 @@ function collectFromJsonLd(
       }
     }
   });
+}
+
+/** A JSON-LD node that represents a product (or product group) — the only place color/size is real. */
+function isProductLikeNode(node: Record<string, unknown>): boolean {
+  const t = node['@type'];
+  const types = Array.isArray(t) ? t : t != null ? [t] : [];
+  if (types.some((x) => /product/i.test(String(x)))) return true;
+  return node.hasVariant != null || node.offers != null || node.sku != null;
 }
 
 /** schema.org `image` can be a string, an array, or an ImageObject ({url|contentUrl}). */
@@ -103,6 +115,8 @@ function collectFromMicrodataAndOg($: CheerioRoot, colors: string[]): void {
 // ── embedded JSON state (PrestaShop / Shopify / Woo `"group":"Color"`) ──────────────
 function collectFromEmbeddedJson(html: string, colors: string[], sizes: string[]): void {
   // PrestaShop-style: {"name":"Gris","group":"Color"} (also "Colour"/"Couleur"/"Tonalidad").
+  // Only the GROUPED form is trusted — a bare `"color":"X"` matches theme/CSS/analytics JSON on any
+  // site (e.g. a `"color":"black"` style token), which falsely tagged content pages as products.
   const grouped = /"name"\s*:\s*"([^"]{1,40})"\s*,\s*"group"\s*:\s*"([^"]{1,40})"/gi;
   let m: RegExpExecArray | null;
   while ((m = grouped.exec(html)) !== null) {
@@ -110,11 +124,5 @@ function collectFromEmbeddedJson(html: string, colors: string[], sizes: string[]
     const group = strip(m[2]);
     if (COLOR_GROUP_RE.test(group)) pushVal(colors, value);
     else if (SIZE_GROUP_RE.test(group)) pushVal(sizes, value);
-  }
-  // Generic "color":"X" / "colour":"X" — lexicon-gated since the key name alone is weak evidence.
-  const direct = /"colou?r"\s*:\s*"([^"]{1,40})"/gi;
-  while ((m = direct.exec(html)) !== null) {
-    const value = decodeEntities(m[1]);
-    if (isColorLike(value)) pushVal(colors, value);
   }
 }

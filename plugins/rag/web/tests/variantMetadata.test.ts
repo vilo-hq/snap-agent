@@ -25,7 +25,7 @@ describe('extractVariants', () => {
     expect(v.sizes).toContain('L');
   });
 
-  it('reads colors from a swatch widget and lexicon-filtered alt text', () => {
+  it('reads colors from a swatch widget, but NOT from descriptive img alt-text', () => {
     const html = `<html><body>
       <div class="product-colors">
         <span class="sr-only">Beige</span><span class="label-color">Gris Oscuro</span>
@@ -35,8 +35,10 @@ describe('extractVariants', () => {
     </body></html>`;
     const v = extractVariants(html);
     const lc = v.colors.map((c) => c.toLowerCase());
-    expect(lc).toEqual(expect.arrayContaining(['beige', 'gris oscuro', 'verde']));
-    // "Modelo"/"posando"/"estilo" are not colors → not captured.
+    // Swatch widget colors are captured.
+    expect(lc).toEqual(expect.arrayContaining(['beige', 'gris oscuro']));
+    // Alt-text color words are NOT a source anymore (too noisy on content pages: "verde", "Camelback").
+    expect(lc).not.toContain('verde');
     expect(lc).not.toContain('modelo');
   });
 
