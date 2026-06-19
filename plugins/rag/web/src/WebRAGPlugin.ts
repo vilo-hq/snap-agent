@@ -339,9 +339,18 @@ export class WebRAGPlugin implements RAGPlugin {
       threadId?: string;
       filters?: Record<string, any>;
       metadata?: Record<string, any>;
+      /** Per-call cap on returned docs, overriding the configured `limit` (clamped to [1, 100]). */
+      limit?: number;
     } = {}
   ): Promise<RAGContext> {
     const queryVector = await this.generateEmbedding(message);
+
+    // Per-call `limit` (e.g. a deeper card pool, or 1 for a focused drill-down) overrides the
+    // configured default. Clamped to [1, 100].
+    const effectiveLimit =
+      typeof options.limit === 'number' && Number.isFinite(options.limit)
+        ? Math.min(Math.max(Math.floor(options.limit), 1), 100)
+        : this.config.limit!;
 
     // Build filter for vector search
     const hardFilters: Record<string, any> = {
@@ -358,6 +367,7 @@ export class WebRAGPlugin implements RAGPlugin {
     const results = await this.vectorSearch({
       queryVector,
       hardFilters,
+      limit: effectiveLimit,
     });
 
     // Apply type boosts if configured
@@ -388,9 +398,9 @@ export class WebRAGPlugin implements RAGPlugin {
       });
     }
 
-    // Sort by final score and limit
+    // Sort by final score and apply the resolved limit (computed above).
     scoredResults.sort((a, b) => b.score - a.score);
-    scoredResults = scoredResults.slice(0, this.config.limit);
+    scoredResults = scoredResults.slice(0, effectiveLimit);
 
     // Format context
     const content = this.formatResultsToContext(scoredResults);
@@ -479,8 +489,14 @@ export class WebRAGPlugin implements RAGPlugin {
   private async vectorSearch(options: {
     queryVector: number[];
     hardFilters: Record<string, any>;
+    /** Target result count (defaults to config.limit). Fetches 2× for post-filter headroom. */
+    limit?: number;
   }): Promise<Array<StoredWebDocument & { score: number }>> {
     const collection = await this.getCollection();
+
+    // Fetch 2× the target for post-filtering (minScore), and ensure numCandidates covers it.
+    const fetchLimit = (options.limit ?? this.config.limit!) * 2;
+    const numCandidates = Math.max(this.config.numCandidates ?? 100, fetchLimit);
 
     const pipeline: any[] = [
       {
@@ -488,8 +504,8 @@ export class WebRAGPlugin implements RAGPlugin {
           index: this.config.vectorIndexName,
           path: 'embedding',
           queryVector: options.queryVector,
-          numCandidates: this.config.numCandidates,
-          limit: this.config.limit! * 2,  // Fetch more for post-filtering
+          numCandidates,
+          limit: fetchLimit,
           filter: options.hardFilters,
         },
       },
@@ -507,7 +523,7 @@ export class WebRAGPlugin implements RAGPlugin {
       });
     }
 
-    pipeline.push({ $limit: this.config.limit! * 2 });
+    pipeline.push({ $limit: fetchLimit });
 
     const results = await collection.aggregate(pipeline).toArray();
 
