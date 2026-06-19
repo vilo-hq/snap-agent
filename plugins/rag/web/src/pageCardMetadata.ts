@@ -65,10 +65,12 @@ const ENTITY_DETAIL_PATH_RES: RegExp[] = [
   /\/authors?\/[^/]+/i,
   /\/leadership\/[^/]+/i,
   /\/biograph(?:y|ies)\/[^/]+/i,
+  /\/propiedad\/[^/]+/i,
+  /\/propiedades\/[^/]+/i,
 ];
 
 const DETAIL_URL_RE =
-  /(?:^|\/)(?:product|products|item|items|p|room|rooms|suite|suites|habitacion|plan|plans|space|spaces|tour|tours|menu|project|perspective|person|team-member|team-members|staff|expert|case-study|author|biography)(?:\/|$)/i;
+  /(?:^|\/)(?:product|products|item|items|p|room|rooms|suite|suites|habitacion|plan|plans|space|spaces|tour|tours|menu|project|perspective|person|team-member|team-members|staff|expert|case-study|author|biography|propiedad|propiedades|inmueble|inmuebles)(?:\/|$)/i;
 
 const LISTING_URL_RE =
   /(?:^|\/)(?:catalog|catalogue|collection|collections|category|categories|shop|store|habitaciones|rooms|products|projects|perspectives|portfolio|people|team|members|insights|case-studies|thought-leadership)(?:\/|$)/i;

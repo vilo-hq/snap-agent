@@ -78,4 +78,23 @@ describe('pageCardMetadata', () => {
     expect(meta.cardPriority).toBe(10);
     expect(meta.displayTitle).toBe('Campus Renewal');
   });
+
+  it('infers detail from Salas Inmobiliaria propiedad URL', () => {
+    expect(
+      inferTypeFromUrl(
+        'https://www.salasinmobiliaria.com.ar/propiedad/4745-amarras-center-torre.html',
+      ),
+    ).toBe('detail');
+  });
+
+  it('classifies Salas Inmobiliaria propiedad as card eligible detail', () => {
+    const meta = resolvePageCardMetadata({
+      url: 'https://www.salasinmobiliaria.com.ar/propiedad/4745-amarras-center-torre.html',
+      title: 'Amarras Center Torre | Salas Inmobiliaria',
+      headingTitle: 'Amarras Center Torre',
+    });
+    expect(meta.type).toBe('detail');
+    expect(meta.cardEligible).toBe(true);
+    expect(meta.cardPriority).toBe(10);
+  });
 });
