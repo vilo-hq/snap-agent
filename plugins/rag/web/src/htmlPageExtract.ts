@@ -1,5 +1,11 @@
 import * as cheerio from 'cheerio';
 import { extractProductMetadata } from './productMetadata';
+import {
+  extractRealEstateMetadata,
+  formatRealEstateLine,
+  hasRealEstatePrice,
+  type RealEstateMetadata,
+} from './realEstateMetadata';
 import { extractVariants, type VariantMetadata } from './variantMetadata';
 import { resolvePageCardMetadata } from './pageCardMetadata';
 
@@ -54,6 +60,28 @@ function formatVariantLine(v: VariantMetadata): string {
   if (v.colors.length > 0) parts.push(`Colores disponibles / available colors: ${v.colors.join(', ')}.`);
   if (v.sizes.length > 0) parts.push(`Tallas disponibles / available sizes: ${v.sizes.join(', ')}.`);
   return parts.join(' ');
+}
+
+function realEstateMetadataFields(meta: RealEstateMetadata): Record<string, unknown> {
+  const fields: Record<string, unknown> = {};
+  if (meta.operationType) fields.operationType = meta.operationType;
+  if (meta.propertyType) fields.propertyType = meta.propertyType;
+  if (meta.bedrooms != null) fields.bedrooms = meta.bedrooms;
+  if (meta.bathrooms != null) fields.bathrooms = meta.bathrooms;
+  if (meta.coveredSqMeters != null) fields.coveredSqMeters = meta.coveredSqMeters;
+  if (meta.landSqMeters != null) fields.landSqMeters = meta.landSqMeters;
+  if (meta.expenses != null) fields.expenses = meta.expenses;
+  if (meta.expensesCurrency) fields.expensesCurrency = meta.expensesCurrency;
+  if (meta.rooms != null) fields.rooms = meta.rooms;
+  if (meta.ageYears != null) fields.ageYears = meta.ageYears;
+  if (meta.parkingSpaces != null) fields.parkingSpaces = meta.parkingSpaces;
+  if (meta.orientation) fields.orientation = meta.orientation;
+  if (meta.rentPrice != null) fields.rentPrice = meta.rentPrice;
+  if (meta.rentCurrency) fields.rentCurrency = meta.rentCurrency;
+  if (meta.salePrice != null) fields.salePrice = meta.salePrice;
+  if (meta.saleCurrency) fields.saleCurrency = meta.saleCurrency;
+  if (meta.services?.length) fields.services = meta.services;
+  return fields;
 }
 
 export interface HtmlPageExtractResult {
@@ -117,8 +145,13 @@ export function extractPageFromHtml(
   // often inside stripped <form>s. Appending them keeps color/size searchable.
   const variants: VariantMetadata =
     options.extractVariantMetadata === false ? { colors: [], sizes: [] } : extractVariants(html, url);
+  const productMeta = extractProductMetadata(html);
+  const realEstateMeta = extractRealEstateMetadata(html);
+  const realEstateLine = formatRealEstateLine(realEstateMeta);
   const variantLine = formatVariantLine(variants);
-  const content = variantLine ? `${baseContent}\n\n${variantLine}` : baseContent;
+  const extraLines = [realEstateLine, variantLine].filter(Boolean);
+  const content =
+    extraLines.length > 0 ? `${baseContent}\n\n${extraLines.join('\n\n')}` : baseContent;
   const minChars = options.minExtractedContentLength ?? 50;
   const indexable = Boolean(baseContent && baseContent.length >= minChars);
 
@@ -155,7 +188,8 @@ export function extractPageFromHtml(
     }
   }
 
-  const productMeta = extractProductMetadata(html);
+  const price = productMeta.price ?? realEstateMeta.price;
+  const currency = productMeta.currency ?? realEstateMeta.currency;
 
   const cardMeta = resolvePageCardMetadata({
     url,
@@ -165,7 +199,7 @@ export function extractPageFromHtml(
     imageUrl,
     html,
     type,
-    hasProductPrice: productMeta.price != null,
+    hasProductPrice: productMeta.price != null || hasRealEstatePrice(realEstateMeta),
   });
 
   const metadata: Record<string, unknown> = {
@@ -179,9 +213,10 @@ export function extractPageFromHtml(
     ...(cardMeta.displayImageUrl ? { displayImageUrl: cardMeta.displayImageUrl } : {}),
     ...(description ? { description } : {}),
     ...(cardMeta.displayDescription ? { displayDescription: cardMeta.displayDescription } : {}),
-    ...(productMeta.price != null ? { price: productMeta.price } : {}),
-    ...(productMeta.currency ? { currency: productMeta.currency } : {}),
+    ...(price != null ? { price } : {}),
+    ...(currency ? { currency } : {}),
     ...(productMeta.availability ? { availability: productMeta.availability } : {}),
+    ...realEstateMetadataFields(realEstateMeta),
     ...(variants.colors.length > 0 ? { colors: variants.colors } : {}),
     ...(variants.sizes.length > 0 ? { sizes: variants.sizes } : {}),
     ...(variants.colorImages && Object.keys(variants.colorImages).length > 0

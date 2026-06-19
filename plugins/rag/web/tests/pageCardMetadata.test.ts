@@ -97,4 +97,28 @@ describe('pageCardMetadata', () => {
     expect(meta.cardEligible).toBe(true);
     expect(meta.cardPriority).toBe(10);
   });
+
+  it('infers detail from REMAX listings URL', () => {
+    expect(
+      inferTypeFromUrl(
+        'https://www.remax.com.ar/listings/depto-en-alquiler-2-amb-luminoso-excelente',
+      ),
+    ).toBe('detail');
+  });
+
+  it('infers detail from Argenprop property slug', () => {
+    expect(
+      inferTypeFromUrl(
+        'https://www.argenprop.com/departamento-en-venta-en-palermo-chico-5-ambientes--18799423',
+      ),
+    ).toBe('detail');
+  });
+
+  it('infers detail from Zonaprop clasificado URL', () => {
+    expect(
+      inferTypeFromUrl(
+        'https://www.zonaprop.com.ar/propiedades/clasificado/alclapin-alquiler-departamento-monoambiente-en-almagro-59054165.html',
+      ),
+    ).toBe('detail');
+  });
 });
