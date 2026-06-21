@@ -7,6 +7,13 @@ export {
 export type { HtmlPageExtractOptions, HtmlPageExtractResult } from './htmlPageExtract';
 export { extractProductMetadata, parsePrice, normalizeCurrency, normalizeAvailability } from './productMetadata';
 export type { ProductMetadata } from './productMetadata';
+export {
+  extractRealEstateMetadata,
+  formatRealEstateLine,
+  hasRealEstatePrice,
+  parseArListingAmount,
+} from './realEstateMetadata';
+export type { RealEstateMetadata } from './realEstateMetadata';
 export { extractVariants } from './storefront';
 export type { VariantMetadata, StorefrontExtractor, StorefrontVariants } from './storefront';
 export {
