@@ -142,4 +142,20 @@ describe('extractPageFromHtml', () => {
       expenses: 156000,
     });
   });
+
+  it('does NOT tag a non-listing page with real-estate fields (structural detect)', () => {
+    // Property-ish prose ("casa", "oficina") but no price + no listing structure → must stay clean.
+    const body = `<main>
+      <h1>SmithGroup Phoenix Office</h1>
+      <p>${'Our office design connects people and purpose, drawing on the Sonoran Desert. '.repeat(3)}</p>
+      <p>A welcoming casa-like atmosphere across the oficina floors near Camelback Mountain.</p>
+    </main>`;
+    const html = `<!DOCTYPE html><html><head><title>SmithGroup Phoenix Office</title></head><body>${body}</body></html>`;
+    const result = extractPageFromHtml('https://smithgroup.com/projects/phoenix-office', html);
+
+    expect(result.metadata.operationType).toBeUndefined();
+    expect(result.metadata.propertyType).toBeUndefined();
+    expect(result.metadata.expenses).toBeUndefined();
+    expect(result.content).not.toMatch(/En venta|for sale|ambientes|Expensas/);
+  });
 });

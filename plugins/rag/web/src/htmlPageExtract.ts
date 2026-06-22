@@ -1,12 +1,6 @@
 import * as cheerio from 'cheerio';
 import { extractProductMetadata } from './productMetadata';
-import {
-  extractRealEstateMetadata,
-  formatRealEstateLine,
-  hasRealEstatePrice,
-  type RealEstateMetadata,
-} from './realEstateMetadata';
-import { extractVariants, type VariantMetadata } from './variantMetadata';
+import { runPageExtractors } from './pageExtractors';
 import { resolvePageCardMetadata } from './pageCardMetadata';
 
 const DEFAULT_CONTENT_SELECTOR =
@@ -52,36 +46,6 @@ export interface HtmlPageExtractOptions {
    * the indexed content so color/size become searchable. Set false for non-product sites.
    */
   extractVariantMetadata?: boolean;
-}
-
-/** Append the available colors/sizes to indexed content so they're searchable (bilingual label). */
-function formatVariantLine(v: VariantMetadata): string {
-  const parts: string[] = [];
-  if (v.colors.length > 0) parts.push(`Colores disponibles / available colors: ${v.colors.join(', ')}.`);
-  if (v.sizes.length > 0) parts.push(`Tallas disponibles / available sizes: ${v.sizes.join(', ')}.`);
-  return parts.join(' ');
-}
-
-function realEstateMetadataFields(meta: RealEstateMetadata): Record<string, unknown> {
-  const fields: Record<string, unknown> = {};
-  if (meta.operationType) fields.operationType = meta.operationType;
-  if (meta.propertyType) fields.propertyType = meta.propertyType;
-  if (meta.bedrooms != null) fields.bedrooms = meta.bedrooms;
-  if (meta.bathrooms != null) fields.bathrooms = meta.bathrooms;
-  if (meta.coveredSqMeters != null) fields.coveredSqMeters = meta.coveredSqMeters;
-  if (meta.landSqMeters != null) fields.landSqMeters = meta.landSqMeters;
-  if (meta.expenses != null) fields.expenses = meta.expenses;
-  if (meta.expensesCurrency) fields.expensesCurrency = meta.expensesCurrency;
-  if (meta.rooms != null) fields.rooms = meta.rooms;
-  if (meta.ageYears != null) fields.ageYears = meta.ageYears;
-  if (meta.parkingSpaces != null) fields.parkingSpaces = meta.parkingSpaces;
-  if (meta.orientation) fields.orientation = meta.orientation;
-  if (meta.rentPrice != null) fields.rentPrice = meta.rentPrice;
-  if (meta.rentCurrency) fields.rentCurrency = meta.rentCurrency;
-  if (meta.salePrice != null) fields.salePrice = meta.salePrice;
-  if (meta.saleCurrency) fields.saleCurrency = meta.saleCurrency;
-  if (meta.services?.length) fields.services = meta.services;
-  return fields;
 }
 
 export interface HtmlPageExtractResult {
@@ -141,15 +105,15 @@ export function extractPageFromHtml(
   }
 
   const baseContent = extractBestContentText($, options);
-  // Variants are read from the FULL html (not the noise-stripped DOM), since swatch widgets are
-  // often inside stripped <form>s. Appending them keeps color/size searchable.
-  const variants: VariantMetadata =
-    options.extractVariantMetadata === false ? { colors: [], sizes: [] } : extractVariants(html, url);
+  // Attribute extraction runs over the FULL html (not the noise-stripped DOM), since variant/listing
+  // widgets often live in stripped <form>s. Registered extractors auto-detect per page; the legacy
+  // `extractVariantMetadata: false` toggle maps to disabling the ecommerce-variants extractor.
+  const extracted = runPageExtractors(
+    { html, url },
+    options.extractVariantMetadata === false ? { disable: ['ecommerce-variants'] } : {},
+  );
   const productMeta = extractProductMetadata(html);
-  const realEstateMeta = extractRealEstateMetadata(html);
-  const realEstateLine = formatRealEstateLine(realEstateMeta);
-  const variantLine = formatVariantLine(variants);
-  const extraLines = [realEstateLine, variantLine].filter(Boolean);
+  const extraLines = [...extracted.contentLines].filter(Boolean);
   const content =
     extraLines.length > 0 ? `${baseContent}\n\n${extraLines.join('\n\n')}` : baseContent;
   const minChars = options.minExtractedContentLength ?? 50;
@@ -188,8 +152,14 @@ export function extractPageFromHtml(
     }
   }
 
-  const price = productMeta.price ?? realEstateMeta.price;
-  const currency = productMeta.currency ?? realEstateMeta.currency;
+  // Top-level price/currency: basics (productMeta) win; otherwise an extractor's price (e.g. a
+  // real-estate listing price surfaced into extracted.metadata).
+  const extractedPrice =
+    typeof extracted.metadata.price === 'number' ? extracted.metadata.price : undefined;
+  const extractedCurrency =
+    typeof extracted.metadata.currency === 'string' ? extracted.metadata.currency : undefined;
+  const price = productMeta.price ?? extractedPrice;
+  const currency = productMeta.currency ?? extractedCurrency;
 
   const cardMeta = resolvePageCardMetadata({
     url,
@@ -199,7 +169,7 @@ export function extractPageFromHtml(
     imageUrl,
     html,
     type,
-    hasProductPrice: productMeta.price != null || hasRealEstatePrice(realEstateMeta),
+    hasProductPrice: productMeta.price != null || extracted.hasPriceSignal,
   });
 
   const metadata: Record<string, unknown> = {
@@ -213,16 +183,11 @@ export function extractPageFromHtml(
     ...(cardMeta.displayImageUrl ? { displayImageUrl: cardMeta.displayImageUrl } : {}),
     ...(description ? { description } : {}),
     ...(cardMeta.displayDescription ? { displayDescription: cardMeta.displayDescription } : {}),
+    ...(productMeta.availability ? { availability: productMeta.availability } : {}),
+    ...extracted.metadata,
+    // Computed price/currency last so basics (productMeta) take precedence over an extractor's.
     ...(price != null ? { price } : {}),
     ...(currency ? { currency } : {}),
-    ...(productMeta.availability ? { availability: productMeta.availability } : {}),
-    ...realEstateMetadataFields(realEstateMeta),
-    ...(variants.colors.length > 0 ? { colors: variants.colors } : {}),
-    ...(variants.sizes.length > 0 ? { sizes: variants.sizes } : {}),
-    ...(variants.colorImages && Object.keys(variants.colorImages).length > 0
-      ? { colorImages: variants.colorImages }
-      : {}),
-    ...(variants.platform ? { storefrontPlatform: variants.platform } : {}),
     ...options.metadata,
   };
 

@@ -17,6 +17,21 @@ export type { RealEstateMetadata } from './realEstateMetadata';
 export { extractVariants } from './storefront';
 export type { VariantMetadata, StorefrontExtractor, StorefrontVariants } from './storefront';
 export {
+  registerPageExtractor,
+  unregisterPageExtractor,
+  getRegisteredPageExtractors,
+  runPageExtractors,
+  ecommerceVariantsExtractor,
+  formatVariantLine,
+} from './pageExtractors';
+export type {
+  PageAttributeExtractor,
+  PageExtractionResult,
+  PageExtractorContext,
+  RunPageExtractorsOptions,
+  RunPageExtractorsResult,
+} from './pageExtractors';
+export {
   resolvePageCardMetadata,
   hardExcludePage,
   inferTypeFromUrl,
