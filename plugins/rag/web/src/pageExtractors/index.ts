@@ -6,11 +6,8 @@
  */
 import { registerPageExtractor } from './registry';
 import { ecommerceVariantsExtractor } from './ecommerceVariants';
-import { realEstateExtractor } from './realEstate';
 
 registerPageExtractor(ecommerceVariantsExtractor);
-// Temporary built-in — slated to move to the host app as a registered vertical pack.
-registerPageExtractor(realEstateExtractor);
 
 export type {
   PageAttributeExtractor,
@@ -26,4 +23,3 @@ export {
   type RunPageExtractorsResult,
 } from './registry';
 export { ecommerceVariantsExtractor, formatVariantLine } from './ecommerceVariants';
-export { realEstateExtractor } from './realEstate';

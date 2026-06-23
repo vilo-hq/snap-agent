@@ -79,72 +79,10 @@ describe('extractPageFromHtml', () => {
     expect(result.content).toContain('Plain body prose');
   });
 
-  it('merges real estate metadata when product tags are absent', () => {
-    const body = `<main>
-      <h1>Departamento en venta en Puerto Madero</h1>
-      <div class="price">$ 1,400,000</div>
-      <ul>
-        <li>2 Dormitorios</li>
-        <li>Baños: 1</li>
-        <li>176 m2 Cubiertos</li>
-      </ul>
-      <p>${'x'.repeat(60)}</p>
-    </main>`;
-    const html = `<!DOCTYPE html><html><head>
-      <title>Amarras Center Torre | Salas Inmobiliaria</title>
-    </head><body>${body}</body></html>`;
-
-    const result = extractPageFromHtml(
-      'https://www.salasinmobiliaria.com.ar/propiedad/4745-amarras-center-torre.html',
-      html,
-    );
-
-    expect(result.metadata).toMatchObject({
-      type: 'detail',
-      cardEligible: true,
-      price: 1400000,
-      currency: 'ARS',
-      operationType: 'sale',
-      propertyType: 'Departamento',
-      bedrooms: 2,
-      bathrooms: 1,
-      coveredSqMeters: 176,
-    });
-    expect(result.content).toContain('En venta / for sale.');
-    expect(result.content).toContain('2 dormitorios / bedrooms.');
-  });
-
-  it('classifies REMAX listing URLs as detail cards with rent metadata', () => {
-    const body = `<main>
-      <h1>DEPTO EN ALQUILER 2 AMB LUMINOSO EXCELENTE</h1>
-      <div>760.000 ARS</div>
-      <div>Expensas : 156.000 ARS</div>
-      <div>2ambientes</div>
-      <div>1dormitorio</div>
-      <div>36.8 m² cubiertos</div>
-      <p>${'x'.repeat(60)}</p>
-    </main>`;
-    const html = `<!DOCTYPE html><html><head>
-      <title>Departamento en alquiler 2 ambientes en Guido 1700</title>
-    </head><body>${body}</body></html>`;
-
-    const result = extractPageFromHtml(
-      'https://www.remax.com.ar/listings/depto-en-alquiler-2-amb-luminoso-excelente',
-      html,
-    );
-
-    expect(result.metadata).toMatchObject({
-      type: 'detail',
-      cardEligible: true,
-      price: 760000,
-      currency: 'ARS',
-      operationType: 'rent',
-      expenses: 156000,
-    });
-  });
-
-  it('does NOT tag a non-listing page with real-estate fields (structural detect)', () => {
-    // Property-ish prose ("casa", "oficina") but no price + no listing structure → must stay clean.
+  // Real-estate extraction moved OUT of the SDK to the host app (a registered vertical pack). The
+  // SDK core must therefore never tag a page with real-estate fields on its own.
+  it('does NOT tag pages with real-estate fields (vertical packs are host-registered)', () => {
+    // Property-ish prose ("casa", "oficina") but no listing structure → must stay clean.
     const body = `<main>
       <h1>SmithGroup Phoenix Office</h1>
       <p>${'Our office design connects people and purpose, drawing on the Sonoran Desert. '.repeat(3)}</p>
