@@ -1739,6 +1739,167 @@ describe('WebRAGPlugin', () => {
       );
       await ledgerPlugin.disconnect();
     });
+
+    // ── content-hash change detection ──────────────────────────────────────
+    const PAGE_HTML =
+      '<html><head><title>Page</title></head><body><p>' +
+      'x'.repeat(400) +
+      '</p><a href="https://example.com/other">next</a></body></html>';
+
+    it('stamps contentHash + hashAlgo on the ledger for a newly indexed page', async () => {
+      mongoLedger.mockFindOne.mockResolvedValue(null);
+      mockFetch.mockResolvedValue({
+        ok: true,
+        headers: { get: () => 'text/html' },
+        text: async () => PAGE_HTML,
+      });
+
+      const ledgerPlugin = new WebRAGPlugin({
+        mongoUri: 'mongodb://localhost:27017',
+        dbName: 'test_db',
+        openaiApiKey: 'test-key',
+        tenantId: 'test-tenant',
+        crawlLedger: { enabled: true },
+      });
+
+      const result = await ledgerPlugin.ingestFromUrls(
+        ['https://example.com/page'],
+        { type: 'page', concurrency: 1, stripQueryParams: true, metadata: { ingestionId: 'ing-add' } },
+        { agentId: 'a1' },
+      );
+
+      expect(openaiMock.create).toHaveBeenCalled();
+      expect(result.metadata?.counters?.added).toBe(1);
+      const upsert = mongoLedger.mockUpdateOne.mock.calls.find(
+        (c) => c[1]?.$set?.lastStatus === 'indexed' && c[1]?.$set?.contentHash,
+      );
+      expect(upsert).toBeDefined();
+      expect(upsert?.[1]?.$set?.hashAlgo).toBe('sha256-v1');
+      await ledgerPlugin.disconnect();
+    });
+
+    it('re-crawl with unchanged content refreshes the ledger but skips embedding (keeps links)', async () => {
+      const ledgerPlugin = new WebRAGPlugin({
+        mongoUri: 'mongodb://localhost:27017',
+        dbName: 'test_db',
+        openaiApiKey: 'test-key',
+        tenantId: 'test-tenant',
+        crawlLedger: { enabled: true },
+      });
+
+      // Pass 1 — new page: crawled, embedded, hash stamped. Capture the exact hash written.
+      mongoLedger.mockFindOne.mockResolvedValue(null);
+      mockFetch.mockResolvedValue({
+        ok: true,
+        headers: { get: () => 'text/html' },
+        text: async () => PAGE_HTML,
+      });
+      await ledgerPlugin.ingestFromUrls(
+        ['https://example.com/page'],
+        { type: 'page', concurrency: 1, stripQueryParams: true, extractLinks: true, metadata: { ingestionId: 'ing-1' } },
+        { agentId: 'a1' },
+      );
+      const firstUpsert = mongoLedger.mockUpdateOne.mock.calls.find(
+        (c) => c[1]?.$set?.lastStatus === 'indexed' && c[1]?.$set?.contentHash,
+      );
+      expect(firstUpsert).toBeDefined();
+      const contentHash = firstUpsert![1].$set.contentHash as string;
+      expect(openaiMock.create).toHaveBeenCalled();
+
+      // Pass 2 — same content, ledger now has the matching hash → unchanged.
+      openaiMock.create.mockClear();
+      mongoLedger.mockFindOne.mockResolvedValue({
+        lastStatus: 'indexed',
+        lastCrawledAt: new Date(),
+        hashAlgo: 'sha256-v1',
+        contentHash,
+      });
+
+      const result = await ledgerPlugin.ingestFromUrls(
+        ['https://example.com/page'],
+        { type: 'page', concurrency: 1, stripQueryParams: true, extractLinks: true, metadata: { ingestionId: 'ing-2' } },
+        { agentId: 'a1', forceRecrawl: true } as any, // bypass TTL → exercise the hash gate
+      );
+
+      expect(openaiMock.create).not.toHaveBeenCalled();
+      expect(result.metadata?.counters?.unchanged).toBe(1);
+      expect(result.metadata?.counters?.changed).toBe(0);
+      expect(result.indexed).toBe(0);
+      expect(result.urlsCrawled).toBe(1);
+      const page = result.metadata?.pageStatuses?.[0];
+      expect(page?.changeStatus).toBe('unchanged');
+      // Critical: unchanged pages must still surface links so the caller's BFS keeps discovering URLs.
+      expect(page?.links?.length).toBeGreaterThan(0);
+      await ledgerPlugin.disconnect();
+    });
+
+    it('re-crawl with changed content re-embeds and updates the stored hash', async () => {
+      mongoLedger.mockFindOne.mockResolvedValue({
+        lastStatus: 'indexed',
+        lastCrawledAt: new Date(),
+        hashAlgo: 'sha256-v1',
+        contentHash: 'stale-old-hash',
+      });
+      mockFetch.mockResolvedValue({
+        ok: true,
+        headers: { get: () => 'text/html' },
+        text: async () => PAGE_HTML,
+      });
+
+      const ledgerPlugin = new WebRAGPlugin({
+        mongoUri: 'mongodb://localhost:27017',
+        dbName: 'test_db',
+        openaiApiKey: 'test-key',
+        tenantId: 'test-tenant',
+        crawlLedger: { enabled: true },
+      });
+
+      const result = await ledgerPlugin.ingestFromUrls(
+        ['https://example.com/page'],
+        { type: 'page', concurrency: 1, stripQueryParams: true, metadata: { ingestionId: 'ing-3' } },
+        { agentId: 'a1', forceRecrawl: true } as any,
+      );
+
+      expect(openaiMock.create).toHaveBeenCalled();
+      expect(result.metadata?.counters?.changed).toBe(1);
+      const upsert = mongoLedger.mockUpdateOne.mock.calls.find(
+        (c) => c[1]?.$set?.lastStatus === 'indexed' && c[1]?.$set?.contentHash,
+      );
+      expect(upsert?.[1]?.$set?.contentHash).not.toBe('stale-old-hash');
+      await ledgerPlugin.disconnect();
+    });
+
+    it('treats a legacy indexed ledger row without contentHash as new (re-embeds once)', async () => {
+      mongoLedger.mockFindOne.mockResolvedValue({
+        lastStatus: 'indexed',
+        lastCrawledAt: new Date(),
+        contentLength: 400, // legacy row: no contentHash / hashAlgo
+      });
+      mockFetch.mockResolvedValue({
+        ok: true,
+        headers: { get: () => 'text/html' },
+        text: async () => PAGE_HTML,
+      });
+
+      const ledgerPlugin = new WebRAGPlugin({
+        mongoUri: 'mongodb://localhost:27017',
+        dbName: 'test_db',
+        openaiApiKey: 'test-key',
+        tenantId: 'test-tenant',
+        crawlLedger: { enabled: true },
+      });
+
+      const result = await ledgerPlugin.ingestFromUrls(
+        ['https://example.com/page'],
+        { type: 'page', concurrency: 1, stripQueryParams: true, metadata: { ingestionId: 'ing-4' } },
+        { agentId: 'a1', forceRecrawl: true } as any,
+      );
+
+      expect(openaiMock.create).toHaveBeenCalled();
+      expect(result.metadata?.counters?.unchanged).toBe(0);
+      expect(result.metadata?.counters?.added).toBe(1);
+      await ledgerPlugin.disconnect();
+    });
   });
 
   describe('render / ledger diagnostics (helpers)', () => {

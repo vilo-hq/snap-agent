@@ -26,6 +26,7 @@ import OpenAI from 'openai';
 import * as cheerio from 'cheerio';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { createHash } from 'node:crypto';
 import {
   bodyTextLengthHint as htmlBodyTextLengthHint,
   extractPageFromHtml,
@@ -81,6 +82,32 @@ function isUrlListingInsert(document: { metadata?: Record<string, unknown> }): b
   } catch {
     return false;
   }
+}
+
+/**
+ * Version of the content-hash normalization. Bump this if `normalizeForHash` changes (or to force a
+ * one-time re-vectorization of everything): a ledger row whose `hashAlgo` differs is treated as
+ * changed. `contentHash` values are only comparable within the same version.
+ */
+const HASH_ALGO_VERSION = 'sha256-v1';
+
+/**
+ * Normalize page text before hashing so non-semantic differences (whitespace, line endings, Unicode
+ * composition) don't register as content changes. Deliberately does NOT lowercase or strip
+ * numbers/symbols — a price/stock change (which lives inside the content) must move the hash.
+ */
+function normalizeForHash(content: string): string {
+  return content
+    .normalize('NFC')
+    .replace(/\r\n?/g, '\n')        // CRLF / CR → LF
+    .replace(/[ \t]+/g, ' ')        // collapse intra-line runs of spaces/tabs
+    .replace(/ *\n */g, '\n')       // trim each line
+    .replace(/\n{3,}/g, '\n\n')     // collapse 3+ blank lines
+    .trim();
+}
+
+function computeContentHash(content: string): string {
+  return createHash('sha256').update(normalizeForHash(content)).digest('hex');
 }
 
 // ============================================================================
@@ -251,6 +278,7 @@ export class WebRAGPlugin implements RAGPlugin {
     urlNormalized: string;
     agentId: string;
     ingestionId?: string;
+    sourceId?: string;
     status: CrawlLedgerStatus;
     doc?: RAGDocument | null;
     diag?: { modeUsed?: string; reason?: string; errorMessage?: string };
@@ -258,6 +286,8 @@ export class WebRAGPlugin implements RAGPlugin {
     title?: string | null;
     docId?: string | null;
     contentLength?: number | null;
+    /** sha256(normalizeForHash(content)); only written for indexed pages, never nulled otherwise. */
+    contentHash?: string;
   }): Promise<void> {
     const col = await this.getLedgerCollection();
     let domain = '';
@@ -281,6 +311,9 @@ export class WebRAGPlugin implements RAGPlugin {
     if (params.ingestionId) {
       $set.ingestionId = params.ingestionId;
     }
+    if (params.sourceId) {
+      $set.sourceId = params.sourceId;
+    }
     if (errMsg !== undefined) {
       $set.errorMessage = errMsg;
     } else if (params.status === 'indexed' && params.doc) {
@@ -291,6 +324,12 @@ export class WebRAGPlugin implements RAGPlugin {
       $set.contentLength = params.doc.content.length;
       $set.title = params.doc.metadata?.title;
       $set.docId = params.doc.id;
+      // Only stamp the content hash on a successful index, and never null it elsewhere — preserving
+      // it across a transient error/too_small avoids a needless re-embed on the next good crawl.
+      if (params.status === 'indexed' && params.contentHash) {
+        $set.contentHash = params.contentHash;
+        $set.hashAlgo = HASH_ALGO_VERSION;
+      }
     } else {
       $set.modeUsed = params.diag?.modeUsed;
       $set.contentLength = params.contentLength ?? null;
@@ -2176,6 +2215,10 @@ export class WebRAGPlugin implements RAGPlugin {
       typeof config.metadata?.ingestionId === 'string' && config.metadata.ingestionId.trim()
         ? config.metadata.ingestionId.trim()
         : undefined;
+    const sourceId =
+      typeof config.metadata?.sourceId === 'string' && config.metadata.sourceId.trim()
+        ? config.metadata.sourceId.trim()
+        : undefined;
 
     const urlByNorm = new Map<string, string>();
     for (const u of urls) {
@@ -2193,6 +2236,10 @@ export class WebRAGPlugin implements RAGPlugin {
       blockedSuspected: 0,
       renderErrors: 0,
       ledgerSkipped: 0,
+      // Content-hash change detection (distinct from ledgerSkipped, which is the pre-fetch TTL skip).
+      added: 0,
+      changed: 0,
+      unchanged: 0,
     };
 
     let indexed = 0;
@@ -2212,43 +2259,48 @@ export class WebRAGPlugin implements RAGPlugin {
           const urlNormalized = this.normalizeLedgerUrl(url, stripQ) || url;
           this.emitCrawlPage(config, { url, event: 'start' });
 
-          if (ledgerOpts && !forceRecrawl) {
-            const entry = await this.findLedgerEntry(urlNormalized, agentId);
-            if (
-              this.shouldSkipLedger(
-                entry,
-                ledgerOpts.ttlMsIndexed,
-                ledgerOpts.ttlMsFailure,
-                ledgerOpts.ttlMsRenderError,
-                false
-              )
-            ) {
-              counters.ledgerSkipped++;
-              this.pushPageStatus(pageStatuses, maxStatuses, {
-                url,
-                urlNormalized,
-                status: 'skipped_ledger',
-                skippedReason: `fresh:${entry?.lastStatus}`,
-                contentLength: entry?.contentLength,
-                title: entry?.title,
-                docId: entry?.docId,
-              });
-              dbg.log('crawl.ledgerSkip', { url, urlNormalized, lastStatus: entry?.lastStatus });
-              if (ledgerOpts) {
-                await this.upsertLedgerRecord({
-                  url,
-                  urlNormalized,
-                  agentId,
-                  ingestionId,
-                  status: 'skipped_ledger',
-                  title: entry?.title,
-                  docId: entry?.docId,
-                  contentLength: entry?.contentLength,
-                });
-              }
-              this.emitCrawlPage(config, { url, event: 'done', status: 'skipped_ledger' });
-              return { kind: 'ledger_skip' as const, url };
-            }
+          // Fetch the ledger row once: needed both for the pre-fetch TTL skip and for the
+          // post-crawl content-hash compare (the latter applies even under forceRecrawl).
+          const ledgerEntry = ledgerOpts
+            ? await this.findLedgerEntry(urlNormalized, agentId)
+            : null;
+
+          // Pre-fetch TTL gate — bypassed entirely under forceRecrawl.
+          if (
+            ledgerOpts &&
+            !forceRecrawl &&
+            this.shouldSkipLedger(
+              ledgerEntry,
+              ledgerOpts.ttlMsIndexed,
+              ledgerOpts.ttlMsFailure,
+              ledgerOpts.ttlMsRenderError,
+              false
+            )
+          ) {
+            counters.ledgerSkipped++;
+            this.pushPageStatus(pageStatuses, maxStatuses, {
+              url,
+              urlNormalized,
+              status: 'skipped_ledger',
+              skippedReason: `fresh:${ledgerEntry?.lastStatus}`,
+              contentLength: ledgerEntry?.contentLength,
+              title: ledgerEntry?.title,
+              docId: ledgerEntry?.docId,
+            });
+            dbg.log('crawl.ledgerSkip', { url, urlNormalized, lastStatus: ledgerEntry?.lastStatus });
+            await this.upsertLedgerRecord({
+              url,
+              urlNormalized,
+              agentId,
+              ingestionId,
+              sourceId,
+              status: 'skipped_ledger',
+              title: ledgerEntry?.title,
+              docId: ledgerEntry?.docId,
+              contentLength: ledgerEntry?.contentLength,
+            });
+            this.emitCrawlPage(config, { url, event: 'done', status: 'skipped_ledger' });
+            return { kind: 'ledger_skip' as const, url };
           }
 
           try {
@@ -2267,12 +2319,93 @@ export class WebRAGPlugin implements RAGPlugin {
             if (diag?.reason === 'render_error') counters.renderErrors++;
 
             const crawlSt = this.toLedgerStatus(doc, diag);
+
+            // Content-hash change detection: only for indexable pages with the ledger enabled.
+            if (ledgerOpts && doc && crawlSt === 'indexed') {
+              const newHash = computeContentHash(doc.content);
+              const isUnchanged =
+                ledgerEntry?.contentHash === newHash &&
+                ledgerEntry?.hashAlgo === HASH_ALGO_VERSION &&
+                ledgerEntry?.lastStatus === 'indexed';
+
+              if (isUnchanged) {
+                // Refresh the ledger (lastCrawledAt/ingestionId/sourceId) but keep contentHash, and
+                // skip re-embedding. Still surface `links` so the caller's BFS keeps discovering URLs.
+                await this.upsertLedgerRecord({
+                  url,
+                  urlNormalized,
+                  agentId,
+                  ingestionId,
+                  sourceId,
+                  status: crawlSt,
+                  doc,
+                  diag,
+                  contentHash: newHash,
+                });
+                counters.unchanged++;
+                this.pushPageStatus(pageStatuses, maxStatuses, {
+                  url,
+                  urlNormalized,
+                  status: crawlSt,
+                  modeUsed: diag?.modeUsed,
+                  contentLength: doc.content.length,
+                  bodyTextLengthHint,
+                  title: doc.metadata?.title,
+                  docId: doc.id,
+                  changeStatus: 'unchanged',
+                  contentHash: newHash,
+                  ...(links ? { links } : {}),
+                });
+                this.emitCrawlPage(config, { url, event: 'done', status: crawlSt });
+                return { kind: 'unchanged' as const, doc, url };
+              }
+
+              // New page (no prior hash) or genuinely changed → re-embed.
+              const changeStatus = ledgerEntry?.contentHash ? 'changed' : 'added';
+              if (changeStatus === 'changed') counters.changed++;
+              else counters.added++;
+              await this.upsertLedgerRecord({
+                url,
+                urlNormalized,
+                agentId,
+                ingestionId,
+                sourceId,
+                status: crawlSt,
+                doc,
+                diag,
+                contentHash: newHash,
+              });
+              this.pushPageStatus(pageStatuses, maxStatuses, {
+                url,
+                urlNormalized,
+                status: crawlSt,
+                modeUsed: diag?.modeUsed,
+                contentLength: doc.content.length,
+                bodyTextLengthHint,
+                title: doc.metadata?.title,
+                docId: doc.id,
+                error: diag?.errorMessage,
+                changeStatus,
+                contentHash: newHash,
+                ...(links ? { links } : {}),
+              });
+              this.emitCrawlPage(config, {
+                url,
+                event: 'done',
+                status: crawlSt,
+                error: diag?.errorMessage,
+              });
+              return { kind: 'doc' as const, doc, url };
+            }
+
+            // Non-indexable pages (too_small / non_html / blocked / error-without-throw): no hash.
             if (ledgerOpts) {
               await this.upsertLedgerRecord({
                 url,
                 urlNormalized,
                 agentId,
                 ingestionId,
+                sourceId,
                 status: crawlSt,
                 doc,
                 diag,
@@ -2307,6 +2440,7 @@ export class WebRAGPlugin implements RAGPlugin {
                 urlNormalized,
                 agentId,
                 ingestionId,
+                sourceId,
                 status: 'error',
                 errorMessage: msg,
               });
@@ -2326,7 +2460,14 @@ export class WebRAGPlugin implements RAGPlugin {
       for (const result of results) {
         if (result.status === 'fulfilled') {
           const v = result.value;
+          // Pre-fetch TTL skip: nothing crawled.
           if (v && typeof v === 'object' && 'kind' in v && v.kind === 'ledger_skip') {
+            continue;
+          }
+          // Content unchanged: crawled (so its links already fed the frontier via pageStatuses) but
+          // NOT pushed to `documents`, so it won't be re-embedded. Counts as crawled coverage.
+          if (v && typeof v === 'object' && 'kind' in v && v.kind === 'unchanged') {
+            urlsCrawled++;
             continue;
           }
           if (v && typeof v === 'object' && 'kind' in v && v.kind === 'doc' && v.doc) {
