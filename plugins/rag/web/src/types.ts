@@ -154,6 +154,14 @@ export interface CrawlPageStatusEntry {
   error?: string;
   skippedReason?: string;
   /**
+   * Content-hash change detection (vs the crawl ledger). 'added' = no prior ledger row,
+   * 'changed' = content hash differs from the stored one, 'unchanged' = identical content, so the
+   * page was crawled but NOT re-embedded. Only set for indexable pages when the ledger is enabled.
+   */
+  changeStatus?: 'added' | 'changed' | 'unchanged';
+  /** sha256 of the normalized content for this page (when computed). */
+  contentHash?: string;
+  /**
    * Same-origin internal links found on this page, populated only when `extractLinks` is set on
    * the crawl config. Enables resumable recursive (BFS) crawling: the caller feeds these back into
    * its own frontier instead of the SDK doing a separate link-discovery fetch.
@@ -166,6 +174,8 @@ export interface CrawlLedgerDocument {
   agentId: string;
   /** Correlates ledger rows with a single ingest run (from crawl metadata.ingestionId). */
   ingestionId?: string;
+  /** Durable knowledge source this URL belongs to (from crawl metadata.sourceId). */
+  sourceId?: string;
   urlNormalized: string;
   url: string;
   domain: string;
@@ -173,6 +183,10 @@ export interface CrawlLedgerDocument {
   lastCrawledAt: Date;
   modeUsed?: string;
   contentLength?: number;
+  /** sha256 of the normalized page content; drives change detection across re-crawls. */
+  contentHash?: string;
+  /** Version of the content-hash normalization used (`contentHash` is comparable only within a version). */
+  hashAlgo?: string;
   title?: string;
   docId?: string;
   httpStatus?: number;
