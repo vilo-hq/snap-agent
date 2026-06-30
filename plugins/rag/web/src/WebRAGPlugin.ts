@@ -122,6 +122,13 @@ export class WebRAGPlugin implements RAGPlugin {
   private config: WebRAGConfig;
   private client: MongoClient | null = null;
   private db: Db | null = null;
+  /**
+   * Single in-flight connection promise. Both `client` and `db` are only assigned AFTER `connect()`
+   * resolves, so concurrent callers can never observe a non-null `client` with a still-null `db`
+   * (the race that surfaced under agentic retrieval's parallel tool calls). All connection users
+   * await this same promise.
+   */
+  private connectPromise: Promise<Db> | null = null;
   private openai: OpenAI;
 
   // Embedding cache
@@ -151,25 +158,39 @@ export class WebRAGPlugin implements RAGPlugin {
   // MongoDB Connection
   // ============================================================================
 
-  private async getCollection(): Promise<Collection<StoredWebDocument>> {
-    if (!this.client) {
-      this.client = new MongoClient(this.config.mongoUri);
-      await this.client.connect();
-      this.db = this.client.db(this.config.dbName);
+  /**
+   * Lazily open (and memoize) the Mongo connection. Concurrent callers share one in-flight promise
+   * instead of each racing to create a client — and `client`/`db` are assigned only after `connect()`
+   * resolves, so no caller ever sees a half-initialized state. On failure the cached promise is
+   * cleared so the next call retries a fresh connection.
+   */
+  private async connect(): Promise<Db> {
+    if (!this.connectPromise) {
+      this.connectPromise = (async () => {
+        const client = new MongoClient(this.config.mongoUri);
+        await client.connect();
+        this.client = client;
+        this.db = client.db(this.config.dbName);
+        return this.db;
+      })().catch((err) => {
+        this.connectPromise = null;
+        throw err;
+      });
     }
-    return this.db!.collection<StoredWebDocument>(this.config.collection!);
+    return this.connectPromise;
+  }
+
+  private async getCollection(): Promise<Collection<StoredWebDocument>> {
+    const db = await this.connect();
+    return db.collection<StoredWebDocument>(this.config.collection!);
   }
 
   private ledgerIndexesEnsured = false;
 
   private async getLedgerCollection(): Promise<Collection<CrawlLedgerDocument>> {
-    if (!this.client) {
-      this.client = new MongoClient(this.config.mongoUri);
-      await this.client.connect();
-      this.db = this.client.db(this.config.dbName);
-    }
+    const db = await this.connect();
     const name = this.config.crawlLedger?.collection ?? 'web_crawl_ledger';
-    const col = this.db!.collection<CrawlLedgerDocument>(name);
+    const col = db.collection<CrawlLedgerDocument>(name);
     if (!this.ledgerIndexesEnsured) {
       this.ledgerIndexesEnsured = true;
       await col.createIndex(
@@ -361,6 +382,7 @@ export class WebRAGPlugin implements RAGPlugin {
       await this.client.close();
       this.client = null;
       this.db = null;
+      this.connectPromise = null;
     }
   }
 
