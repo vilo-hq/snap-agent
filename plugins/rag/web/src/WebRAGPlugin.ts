@@ -472,7 +472,10 @@ export class WebRAGPlugin implements RAGPlugin {
         plugin: this.name,
         contentCount: scoredResults.length,
         types: [...new Set(scoredResults.map(d => d.metadata.type))],
-        topResults: scoredResults.slice(0, 16).map(doc => ({
+        // Expose the FULL retrieved set (already bounded by effectiveLimit above), not a hardcoded
+        // 16. The host card pipeline filters/reranks this pool, so capping it here starved recall for
+        // minority attributes (e.g. "manga larga" when short-sleeve dominates the top 16).
+        topResults: scoredResults.map(doc => ({
           id: doc.id,
           type: doc.metadata.type,
           title: doc.metadata.title,
