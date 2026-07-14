@@ -587,6 +587,12 @@ export class WebRAGPlugin implements RAGPlugin {
       });
     }
 
+    // Exclude the embedding vector from the payload: retrieveContext only reads content/metadata/score,
+    // never doc.embedding. Without this, each of the fetchLimit (2×limit) matches ships its 1536-float
+    // vector (~1MB total for limit=40) across the Atlas→app network — the dominant cost of retrieval.
+    // Pure exclusion ({ embedding: 0 }) keeps every other field intact.
+    pipeline.push({ $project: { embedding: 0 } });
+
     pipeline.push({ $limit: fetchLimit });
 
     const results = await collection.aggregate(pipeline).toArray();
