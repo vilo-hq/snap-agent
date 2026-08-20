@@ -828,18 +828,34 @@ export class WebRAGPlugin implements RAGPlugin {
       const chunks = chunkPlan[docIndex]!;
       const isChunked = chunks.length > 1;
 
-      // Remove any previous chunks for this document before re-ingesting
-      if (isChunked) {
-        try {
-          await collection.deleteMany({
-            tenantId: this.config.tenantId,
-            documentId: doc.id,
-            agentId,
-          });
-        } catch (error) {
-          markFailed(doc.id, error);
-          continue;
-        }
+      // Remove any previous chunks for this document before re-ingesting.
+      //
+      // Acotado por sourceId: `documentId` se deriva de la URL y NO es único entre sources del
+      // mismo agente, así que sin este filtro dos sources que compartan una URL —o cuyos ids
+      // colisionen al truncarse— se borran los chunks entre sí.
+      //
+      // Y corre SIEMPRE, no sólo cuando el documento quedó chunkeado: si una página pasó de
+      // chunkeada a no-chunkeada, el borrado condicionado dejaba vivos los chunks viejos.
+      //
+      // Y borra por las DOS formas de id: un documento que antes cabía en un solo chunk se guardó
+      // con `id: doc.id` y sin `documentId`; si ahora se chunkea, borrar sólo por `documentId`
+      // deja vivo el singleton viejo y la página queda duplicada.
+      const sourceId = doc.metadata?.sourceId;
+      const scope = {
+        tenantId: this.config.tenantId,
+        agentId,
+        // SIEMPRE presente. Omitirlo cuando falta no acota menos: no acota nada, y el borrado se
+        // lleva puestos los chunks de otro source que comparta el id de documento.
+        'metadata.sourceId': typeof sourceId === 'string' && sourceId ? sourceId : null,
+      };
+      try {
+        await collection.deleteMany({
+          ...scope,
+          $or: [{ documentId: doc.id }, { id: doc.id }],
+        });
+      } catch (error) {
+        markFailed(doc.id, error);
+        continue;
       }
 
       for (let i = 0; i < chunks.length; i++) {

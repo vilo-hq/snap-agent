@@ -8,6 +8,8 @@ const mongoLedger = vi.hoisted(() => {
   const mockUpdateOne = vi.fn().mockResolvedValue({ upsertedCount: 1 });
   const mockUpdateMany = vi.fn().mockResolvedValue({ modifiedCount: 1 });
   const mockBulkWrite = vi.fn().mockResolvedValue({ upsertedCount: 1, modifiedCount: 0 });
+  const mockCreateIndex = vi.fn().mockResolvedValue('idx');
+  const mockDeleteMany = vi.fn().mockResolvedValue({ deletedCount: 1 });
   const mockCollection = {
     aggregate: vi.fn().mockReturnValue({
       toArray: vi.fn().mockResolvedValue([]),
@@ -15,8 +17,8 @@ const mongoLedger = vi.hoisted(() => {
     updateOne: mockUpdateOne,
     updateMany: mockUpdateMany,
     bulkWrite: mockBulkWrite,
-    createIndex: vi.fn().mockResolvedValue('idx'),
-    deleteMany: vi.fn().mockResolvedValue({ deletedCount: 1 }),
+    createIndex: mockCreateIndex,
+    deleteMany: mockDeleteMany,
     findOne: mockFindOne,
     find: vi.fn().mockReturnValue({
       sort: vi.fn().mockReturnValue({
@@ -42,6 +44,9 @@ const mongoLedger = vi.hoisted(() => {
     mockUpdateOne,
     mockUpdateMany,
     mockBulkWrite,
+    mockCreateIndex,
+    mockDeleteMany,
+    mockClient,
     toArrayFind,
   };
 });
@@ -84,6 +89,9 @@ describe('WebRAGPlugin', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // Some tests install a client-specific implementation; restore the fixture client so it does
+    // not leak into subsequent tests, because clearAllMocks() preserves mock implementations.
+    mongoLedger.MongoClient.mockImplementation(() => mongoLedger.mockClient);
     mongoLedger.mockFindOne.mockResolvedValue(null);
     mongoLedger.toArrayFind.mockResolvedValue([]);
     plugin = new WebRAGPlugin({
@@ -2110,5 +2118,62 @@ describe('WebRAGPlugin', () => {
       expect(result.success).toBe(true);
     });
   });
-});
 
+  describe('ingest: borrado de chunks previos', () => {
+    it('acota el deleteMany por sourceId cuando el documento lo trae', async () => {
+      await plugin.ingest(
+        [
+          {
+            id: 'doc-a',
+            content: 'x'.repeat(5000),
+            metadata: { type: 'detail', url: 'https://a.test/p/1', sourceId: 'src-1' },
+          },
+        ],
+        { agentId: 'agent-1' },
+      );
+
+      const call = mongoLedger.mockDeleteMany.mock.calls[0][0];
+      // El id va dentro del $or —hay que borrar por las dos formas—, así que se afirma aparte del
+      // scope. Afirmar `documentId` en el nivel superior falla contra la implementación correcta.
+      expect(call.$or).toEqual([{ documentId: 'doc-a' }, { id: 'doc-a' }]);
+      expect(call.agentId).toBe('agent-1');
+      expect(call['metadata.sourceId']).toBe('src-1');
+    });
+
+    it('acota al ambito legacy cuando el documento no trae sourceId', async () => {
+      // El campo va igual, como null: sin él el borrado dejaría de filtrar por source y alcanzaría
+      // los chunks de cualquiera que comparta el id.
+      mongoLedger.mockDeleteMany.mockClear();
+      await plugin.ingest(
+        [{ id: 'doc-z', content: 'x'.repeat(5000), metadata: { type: 'detail', url: 'https://a.test/p/9' } }],
+        { agentId: 'agent-1' },
+      );
+      expect(mongoLedger.mockDeleteMany.mock.calls[0][0]['metadata.sourceId']).toBeNull();
+    });
+
+    it('no toca los chunks de otro source con el mismo documentId', async () => {
+      mongoLedger.mockDeleteMany.mockClear();
+      await plugin.ingest(
+        [{ id: 'compartido', content: 'x'.repeat(5000), metadata: { type: 'detail', url: 'https://a.test/p/1', sourceId: 'src-2' } }],
+        { agentId: 'agent-1' },
+      );
+      expect(mongoLedger.mockDeleteMany.mock.calls[0][0]['metadata.sourceId']).toBe('src-2');
+    });
+
+    it('borra también cuando el documento NO queda chunkeado', async () => {
+      mongoLedger.mockDeleteMany.mockClear();
+      await plugin.ingest(
+        [
+          {
+            id: 'doc-b',
+            content: 'corto',
+            metadata: { type: 'detail', url: 'https://a.test/p/2', sourceId: 'src-1' },
+          },
+        ],
+        { agentId: 'agent-1' },
+      );
+
+      expect(mongoLedger.mockDeleteMany).toHaveBeenCalled();
+    });
+  });
+});
