@@ -1,7 +1,32 @@
 import { describe, it, expect } from 'vitest';
-import { extractPageFromHtml } from '../src/htmlPageExtract';
+import { extractPageFromHtml, sourceScopedDocumentId } from '../src/htmlPageExtract';
 
 const BODY = '<p>' + 'x'.repeat(60) + '</p>';
+
+describe('sourceScopedDocumentId', () => {
+  it('es determinista', () => {
+    const a = sourceScopedDocumentId('src-1', 'https://x.test/p/1');
+    const b = sourceScopedDocumentId('src-1', 'https://x.test/p/1');
+    expect(a).toBe(b);
+  });
+
+  it('distingue dos URLs largas que urlToDocumentId colapsaría', () => {
+    const base = 'https://x.test/' + 'a'.repeat(120);
+    const uno = sourceScopedDocumentId('src-1', base + '/uno');
+    const dos = sourceScopedDocumentId('src-1', base + '/dos');
+    expect(uno).not.toBe(dos);
+  });
+
+  it('distingue la misma URL en sources distintos', () => {
+    const uno = sourceScopedDocumentId('src-1', 'https://x.test/p/1');
+    const dos = sourceScopedDocumentId('src-2', 'https://x.test/p/1');
+    expect(uno).not.toBe(dos);
+  });
+
+  it('lleva el sourceId por delante para que sea legible en la base', () => {
+    expect(sourceScopedDocumentId('src-1', 'https://x.test/p/1').startsWith('src-1:')).toBe(true);
+  });
+});
 
 describe('extractPageFromHtml', () => {
   it('returns full metadata including product fields', () => {

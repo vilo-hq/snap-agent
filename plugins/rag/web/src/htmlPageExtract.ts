@@ -1,4 +1,5 @@
 import * as cheerio from 'cheerio';
+import { createHash } from 'node:crypto';
 import { extractProductMetadata } from './productMetadata';
 import { runPageExtractors } from './pageExtractors';
 import { resolvePageCardMetadata } from './pageCardMetadata';
@@ -64,6 +65,20 @@ export function urlToDocumentId(url: string): string {
     .replace(/-+/g, '-')
     .replace(/^-|-$/g, '')
     .substring(0, 100);
+}
+
+/**
+ * Identidad de documento del camino de HTML provisto.
+ *
+ * `urlToDocumentId` trunca a 100 caracteres y no lleva el source, así que dos URLs largas del
+ * mismo sitio —o la misma URL en dos sources del mismo agente— colisionan. Ésta no colisiona y
+ * conserva el source al frente para que una fila siga siendo legible en la base.
+ *
+ * No reemplaza a `urlToDocumentId`: cambiar aquélla dejaría huérfano todo lo ya indexado.
+ */
+export function sourceScopedDocumentId(sourceId: string, url: string): string {
+  const digest = createHash('sha256').update(url).digest('hex').slice(0, 40);
+  return `${sourceId}:${digest}`;
 }
 
 export function cleanContent(text: string): string {
