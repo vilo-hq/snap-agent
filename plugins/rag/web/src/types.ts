@@ -174,8 +174,8 @@ export interface CrawlLedgerDocument {
   agentId: string;
   /** Correlates ledger rows with a single ingest run (from crawl metadata.ingestionId). */
   ingestionId?: string;
-  /** Durable knowledge source this URL belongs to (from crawl metadata.sourceId). */
-  sourceId?: string;
+  /** Durable knowledge source this URL belongs to; null is the legacy scope and filters always include this field. */
+  sourceId?: string | null;
   urlNormalized: string;
   url: string;
   domain: string;
@@ -627,4 +627,3 @@ export interface WebURLIngestResult extends WebIngestResult {
   fetchedAt: Date;
   documentsFetched: number;
 }
-
