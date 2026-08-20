@@ -91,6 +91,11 @@ function isUrlListingInsert(document: { metadata?: Record<string, unknown> }): b
  */
 const HASH_ALGO_VERSION = 'sha256-v1';
 
+/** El ámbito de una operación de ledger. `null` es el ámbito legacy, no "cualquiera". */
+function ledgerScope(sourceId: string | undefined): { sourceId: string | null } {
+  return { sourceId: sourceId ?? null };
+}
+
 /**
  * Normalize page text before hashing so non-semantic differences (whitespace, line endings, Unicode
  * composition) don't register as content changes. Deliberately does NOT lowercase or strip
@@ -193,8 +198,15 @@ export class WebRAGPlugin implements RAGPlugin {
     const col = db.collection<CrawlLedgerDocument>(name);
     if (!this.ledgerIndexesEnsured) {
       this.ledgerIndexesEnsured = true;
+      // La identidad de una fila de ledger incluye el source. Sin él, dos sources del mismo agente
+      // que compartan una URL comparten una fila: cada upsert le pisa al otro el sourceId y el
+      // ingestionId, y el diff de re-crawl deja de pertenecer a un corpus.
+      //
+      // La migración de la clave vieja la hace el server; acá sólo se declara la nueva. Ver
+      // "Orden entre repos" en el plan: este paquete tiene que publicarse ANTES de esa migración,
+      // porque si no el SDK viejo vuelve a crear el índice sin sourceId y la deshace.
       await col.createIndex(
-        { tenantId: 1, agentId: 1, urlNormalized: 1 },
+        { tenantId: 1, agentId: 1, sourceId: 1, urlNormalized: 1 },
         { unique: true },
       );
       await col.createIndex({ tenantId: 1, agentId: 1, ingestionId: 1, lastCrawledAt: -1 });
@@ -273,13 +285,15 @@ export class WebRAGPlugin implements RAGPlugin {
 
   private async findLedgerEntry(
     urlNormalized: string,
-    agentId: string
+    agentId: string,
+    sourceId: string | undefined,
   ): Promise<CrawlLedgerDocument | null> {
     const col = await this.getLedgerCollection();
     return col.findOne({
       tenantId: this.config.tenantId,
       agentId,
       urlNormalized,
+      ...ledgerScope(sourceId),
     });
   }
 
@@ -362,6 +376,7 @@ export class WebRAGPlugin implements RAGPlugin {
         tenantId: this.config.tenantId,
         agentId: params.agentId,
         urlNormalized: params.urlNormalized,
+        ...ledgerScope(params.sourceId),
       },
       { $set },
       { upsert: true }
@@ -2309,7 +2324,7 @@ export class WebRAGPlugin implements RAGPlugin {
           // Fetch the ledger row once: needed both for the pre-fetch TTL skip and for the
           // post-crawl content-hash compare (the latter applies even under forceRecrawl).
           const ledgerEntry = ledgerOpts
-            ? await this.findLedgerEntry(urlNormalized, agentId)
+            ? await this.findLedgerEntry(urlNormalized, agentId, sourceId)
             : null;
 
           // Pre-fetch TTL gate — bypassed entirely under forceRecrawl.
@@ -3352,4 +3367,3 @@ export class WebRAGPlugin implements RAGPlugin {
     };
   }
 }
-

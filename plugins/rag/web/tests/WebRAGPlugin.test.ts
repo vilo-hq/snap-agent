@@ -2176,4 +2176,53 @@ describe('WebRAGPlugin', () => {
       expect(mongoLedger.mockDeleteMany).toHaveBeenCalled();
     });
   });
+
+  describe('ledger: índice de identidad', () => {
+    it('declara el índice único incluyendo sourceId', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        headers: { get: () => 'text/html' },
+        text: async () => `<html><body>${'y'.repeat(5000)}</body></html>`,
+      });
+      // El índice se declara al usar el ledger; ingest() no llega a getLedgerCollection().
+      await plugin.ingestFromUrls(
+        ['https://a.test/p/3'],
+        { crawlLedger: { enabled: true } },
+        { agentId: 'agent-1' },
+      );
+
+      const uniqueCalls = mongoLedger.mockCreateIndex.mock.calls.filter(
+        ([, opts]: [unknown, { unique?: boolean } | undefined]) => opts?.unique === true,
+      );
+      expect(uniqueCalls.length).toBeGreaterThan(0);
+      expect(uniqueCalls[0][0]).toEqual({ tenantId: 1, agentId: 1, sourceId: 1, urlNormalized: 1 });
+    });
+
+    it('dos sources con la misma URL no comparten fila de ledger', async () => {
+      mongoLedger.mockUpdateOne.mockClear();
+      mockFetch.mockResolvedValue({
+        ok: true,
+        headers: { get: () => 'text/html' },
+        text: async () => `<html><body>${'z'.repeat(5000)}</body></html>`,
+      });
+      // sourceId viaja en config.metadata, no en options.metadata.
+      await plugin.ingestFromUrls(['https://a.test/p/1'], {
+        crawlLedger: { enabled: true },
+        metadata: { sourceId: 'src-1' },
+      }, {
+        agentId: 'agent-1',
+      });
+      await plugin.ingestFromUrls(['https://a.test/p/1'], {
+        crawlLedger: { enabled: true },
+        metadata: { sourceId: 'src-2' },
+      }, {
+        agentId: 'agent-1',
+      });
+      const scopes = mongoLedger.mockUpdateOne.mock.calls.map(([filter]) => filter.sourceId);
+      expect(scopes).toContain('src-1');
+      expect(scopes).toContain('src-2');
+      // Y ninguna llamada quedó sin el campo.
+      expect(mongoLedger.mockUpdateOne.mock.calls.every(([filter]) => 'sourceId' in filter)).toBe(true);
+    });
+  });
 });
