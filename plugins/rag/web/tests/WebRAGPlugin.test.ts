@@ -2258,4 +2258,58 @@ describe('WebRAGPlugin', () => {
       expect(stampedHash).toBe(false);
     });
   });
+
+  describe('affirmPages', () => {
+    it('refresca ingestionId y lastCrawledAt sin tocar el contentHash', async () => {
+      mongoLedger.mockUpdateOne.mockClear();
+
+      const result = await plugin.affirmPages(
+        [{ url: 'https://a.test/p/1', sourceId: 'src-1', ingestionId: 'ing-9' }],
+        { stripQueryParams: true },
+        { agentId: 'agent-1' },
+      );
+
+      expect(result.affirmed).toBe(1);
+      expect(result.pages).toEqual([
+        expect.objectContaining({
+          url: 'https://a.test/p/1',
+          urlNormalized: expect.any(String),
+          outcome: 'affirmed',
+        }),
+      ]);
+      const [, update] = mongoLedger.mockUpdateOne.mock.calls[0];
+      expect(update.$set.ingestionId).toBe('ing-9');
+      expect(update.$set.lastCrawledAt).toBeInstanceOf(Date);
+      expect(update.$set.contentHash).toBeUndefined();
+    });
+
+    it('no hace ninguna escritura con una lista vacía', async () => {
+      mongoLedger.mockUpdateOne.mockClear();
+      const result = await plugin.affirmPages([], {}, { agentId: 'agent-1' });
+      expect(result.affirmed).toBe(0);
+      expect(result.pages).toEqual([]);
+      expect(mongoLedger.mockUpdateOne).not.toHaveBeenCalled();
+    });
+
+    it('conserva la posición de una URL inválida sin escribir una fila cruda', async () => {
+      mongoLedger.mockUpdateOne.mockClear();
+
+      const result = await plugin.affirmPages(
+        [{ url: 'no es una url', sourceId: 'src-1', ingestionId: 'ing-9' }],
+        {},
+        { agentId: 'agent-1' },
+      );
+
+      expect(result).toEqual({
+        affirmed: 0,
+        pages: [{
+          url: 'no es una url',
+          urlNormalized: null,
+          outcome: 'failed',
+          errorCode: 'invalid_url',
+        }],
+      });
+      expect(mongoLedger.mockUpdateOne).not.toHaveBeenCalled();
+    });
+  });
 });

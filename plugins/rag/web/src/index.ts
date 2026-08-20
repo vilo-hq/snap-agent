@@ -66,4 +66,8 @@ export type {
   BulkProgressPhase,
   WebIngestResult,
   WebURLIngestResult,
+  LedgerUrlConfig,
+  AffirmPageInput,
+  AffirmPageResult,
+  AffirmPagesResult,
 } from './types';

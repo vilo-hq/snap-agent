@@ -194,6 +194,31 @@ export interface CrawlLedgerDocument {
   updatedAt: Date;
 }
 
+export interface AffirmPageInput {
+  /** `requestedUrl` tal como la reportó el adquiriente. Es la clave. */
+  url: string;
+  sourceId: string;
+  ingestionId: string;
+}
+
+export interface LedgerUrlConfig {
+  stripQueryParams?: boolean;
+}
+
+export interface AffirmPageResult {
+  url: string;
+  urlNormalized: string | null;
+  outcome: 'affirmed' | 'failed';
+  error?: string;
+  errorCode?: 'invalid_url' | 'ledger_write_failed';
+}
+
+export interface AffirmPagesResult {
+  affirmed: number;
+  /** `pages.length === input.length`; mismo orden, sin truncar. */
+  pages: AffirmPageResult[];
+}
+
 /**
  * URL source for ingesting content from external APIs
  */

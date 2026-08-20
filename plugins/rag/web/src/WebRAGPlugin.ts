@@ -61,6 +61,10 @@ import type {
   CrawlProgressCallback,
   CrawlProgressUpdate,
   CrawlPageEvent,
+  AffirmPageInput,
+  LedgerUrlConfig,
+  AffirmPageResult,
+  AffirmPagesResult,
 } from './types';
 
 function bulkOpCurrentUrl(op: BulkOperation): string | undefined {
@@ -263,6 +267,15 @@ export class WebRAGPlugin implements RAGPlugin {
     return this.normalizeWebsiteUrl(url, stripQuery);
   }
 
+  private normalizeLedgerUrls(
+    requestedUrls: readonly string[],
+    config: LedgerUrlConfig = {},
+  ): Array<{ urlNormalized: string | null }> {
+    return requestedUrls.map((url) => ({
+      urlNormalized: this.normalizeLedgerUrl(url, config.stripQueryParams ?? false),
+    }));
+  }
+
   private shouldSkipLedger(
     entry: CrawlLedgerDocument | null | undefined,
     ttlMsIndexed: number,
@@ -417,6 +430,67 @@ export class WebRAGPlugin implements RAGPlugin {
         },
       })),
     );
+  }
+
+  /**
+   * Marca páginas como vistas por esta ingesta sin volver a extraerlas.
+   *
+   * El adquiriente decide que una página no cambió comparando su propio hash de HTML, y por eso no
+   * descarga el cuerpo. La fila igual tiene que quedar afirmada para el `ingestionId` actual: sin
+   * esto, el cierre de la ingesta lee esas páginas como ausentes y las borra — o sea que un
+   * re-crawl donde no cambió nada vaciaría el source.
+   *
+   * No toca `contentHash`: la página no se volvió a extraer, así que no hay nada nuevo que afirmar
+   * sobre su contenido.
+   */
+  async affirmPages(
+    pages: readonly AffirmPageInput[],
+    config: LedgerUrlConfig = {},
+    options?: IngestOptions,
+  ): Promise<AffirmPagesResult> {
+    if (pages.length === 0) return { affirmed: 0, pages: [] };
+    const agentId = options?.agentId || 'shared';
+    const mappings = this.normalizeLedgerUrls(
+      pages.map((page) => page.url),
+      config,
+    );
+    const results: AffirmPageResult[] = [];
+
+    for (const [index, page] of pages.entries()) {
+      const mapping = mappings[index]!;
+      if (mapping.urlNormalized === null) {
+        results.push({
+          url: page.url,
+          urlNormalized: null,
+          outcome: 'failed',
+          errorCode: 'invalid_url',
+        });
+        continue;
+      }
+      try {
+        await this.upsertLedgerRecord({
+          url: page.url,
+          urlNormalized: mapping.urlNormalized,
+          agentId,
+          ingestionId: page.ingestionId,
+          sourceId: page.sourceId,
+          status: 'indexed',
+        });
+        results.push({ url: page.url, urlNormalized: mapping.urlNormalized, outcome: 'affirmed' });
+      } catch (error) {
+        results.push({
+          url: page.url,
+          urlNormalized: mapping.urlNormalized,
+          outcome: 'failed',
+          error: error instanceof Error ? error.message : String(error),
+          errorCode: 'ledger_write_failed',
+        });
+      }
+    }
+    return {
+      affirmed: results.filter((result) => result.outcome === 'affirmed').length,
+      pages: results,
+    };
   }
 
   private pushPageStatus(
