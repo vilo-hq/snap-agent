@@ -219,6 +219,54 @@ export interface AffirmPagesResult {
   pages: AffirmPageResult[];
 }
 
+/** Estado con el que el adquiriente cerró la página. Enum cerrado del crawler. */
+export type ProvidedPageStatus =
+  | 'ok' | 'non_html' | 'timeout' | 'blocked'
+  | 'robots_denied' | 'too_large' | 'ssrf_denied' | 'render_failed' | 'error';
+
+export interface ProvidedPage {
+  /** `requestedUrl`, tal como la reportó el adquiriente. Es la clave; nunca la URL final. */
+  url: string;
+  status: ProvidedPageStatus;
+  /** Requerido sólo cuando `status === 'ok'`. */
+  html?: string;
+  /** Huella del adquiriente; la persiste el server sólo después de validar el commit por página. */
+  fetchHash?: string;
+  sourceId: string;
+  ingestionId: string;
+}
+
+export type ProvidedPageOutcome =
+  | 'added' | 'changed' | 'unchanged' | 'not_indexable' | 'skipped_status' | 'failed';
+
+export interface ProvidedPageResult {
+  url: string;
+  urlNormalized: string | null;
+  outcome: ProvidedPageOutcome;
+  documentId?: string;
+  contentHash?: string;
+  cardEligible?: boolean;
+  type?: string;
+  error?: string;
+  errorCode?:
+    | 'invalid_url'
+    | 'ledger_write_failed'
+    | 'embedding_failed'
+    | 'content_write_failed';
+}
+
+export interface IngestFromHtmlResult {
+  indexed: number;
+  failed: number;
+  /** Un resultado por página de entrada, en el mismo orden. Sin truncar. */
+  pages: ProvidedPageResult[];
+}
+
+export interface LedgerUrlMapping {
+  requestedUrl: string;
+  urlNormalized: string | null;
+}
+
 /**
  * URL source for ingesting content from external APIs
  */

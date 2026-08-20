@@ -30,6 +30,7 @@ import { createHash } from 'node:crypto';
 import {
   bodyTextLengthHint as htmlBodyTextLengthHint,
   extractPageFromHtml,
+  sourceScopedDocumentId,
   urlToDocumentId,
 } from './htmlPageExtract';
 import { runWithConcurrency } from './concurrency';
@@ -65,6 +66,11 @@ import type {
   LedgerUrlConfig,
   AffirmPageResult,
   AffirmPagesResult,
+  ProvidedPage,
+  ProvidedPageStatus,
+  ProvidedPageResult,
+  IngestFromHtmlResult,
+  LedgerUrlMapping,
 } from './types';
 
 function bulkOpCurrentUrl(op: BulkOperation): string | undefined {
@@ -267,11 +273,13 @@ export class WebRAGPlugin implements RAGPlugin {
     return this.normalizeWebsiteUrl(url, stripQuery);
   }
 
-  private normalizeLedgerUrls(
+  /** Un resultado por entrada, en el mismo orden. No escribe. */
+  normalizeLedgerUrls(
     requestedUrls: readonly string[],
     config: LedgerUrlConfig = {},
-  ): Array<{ urlNormalized: string | null }> {
+  ): LedgerUrlMapping[] {
     return requestedUrls.map((url) => ({
+      requestedUrl: url,
       urlNormalized: this.normalizeLedgerUrl(url, config.stripQueryParams ?? false),
     }));
   }
@@ -491,6 +499,204 @@ export class WebRAGPlugin implements RAGPlugin {
       affirmed: results.filter((result) => result.outcome === 'affirmed').length,
       pages: results,
     };
+  }
+
+  /**
+   * Ingesta de páginas ya adquiridas. El HTML lo trae quien llama; este método no sale a la red.
+   *
+   * Hace exactamente lo que `crawlUrls` hace DESPUÉS del fetch —extraer, decidir si cambió,
+   * embeddear y escribir el ledger— y devuelve un resultado por página. El orden
+   * hash/embeddings es el de 0.5.4: el hash se estampa recién cuando el embedding existe.
+   */
+  async ingestFromHtml(
+    pages: ProvidedPage[],
+    config: UrlListConfig = {},
+    options?: IngestOptions,
+  ): Promise<IngestFromHtmlResult> {
+    const agentId = options?.agentId || 'shared';
+    const results: ProvidedPageResult[] = [];
+    const documents: RAGDocument[] = [];
+    const pendingHashes = new Map<
+      string,
+      { urlNormalized: string; sourceId?: string; contentHash: string }
+    >();
+    const mappings = this.normalizeLedgerUrls(
+      pages.map((page) => page.url),
+      { stripQueryParams: config.stripQueryParams },
+    );
+
+    for (const [index, page] of pages.entries()) {
+      const mapping = mappings[index]!;
+      if (mapping.urlNormalized === null) {
+        results.push({
+          url: page.url,
+          urlNormalized: null,
+          outcome: 'failed',
+          errorCode: 'invalid_url',
+        });
+        continue;
+      }
+      const urlNormalized = mapping.urlNormalized;
+      if (page.status !== 'ok' || !page.html) {
+        try {
+          await this.upsertLedgerRecord({
+            url: page.url,
+            urlNormalized,
+            agentId,
+            ingestionId: page.ingestionId,
+            sourceId: page.sourceId,
+            status: this.ledgerStatusFor(page.status),
+          });
+          results.push({ url: page.url, urlNormalized, outcome: 'skipped_status' });
+        } catch (error) {
+          results.push(this.ledgerWriteFailure(page.url, urlNormalized, error));
+        }
+        continue;
+      }
+
+      const extracted = extractPageFromHtml(page.url, page.html, config as SitemapConfig);
+      if (!extracted.indexable) {
+        try {
+          await this.upsertLedgerRecord({
+            url: page.url,
+            urlNormalized,
+            agentId,
+            ingestionId: page.ingestionId,
+            sourceId: page.sourceId,
+            status: 'too_small',
+          });
+          results.push({ url: page.url, urlNormalized, outcome: 'not_indexable' });
+        } catch (error) {
+          results.push(this.ledgerWriteFailure(page.url, urlNormalized, error));
+        }
+        continue;
+      }
+
+      const newHash = computeContentHash(extracted.content);
+      const doc: RAGDocument = {
+        id: sourceScopedDocumentId(page.sourceId, page.url),
+        content: extracted.content,
+        metadata: {
+          ...(extracted.metadata as RAGDocument['metadata']),
+          sourceId: page.sourceId,
+          ingestionId: page.ingestionId,
+        },
+      };
+      try {
+        const ledgerEntry = await this.findLedgerEntry(urlNormalized, agentId, page.sourceId);
+        const isUnchanged =
+          ledgerEntry?.contentHash === newHash &&
+          ledgerEntry?.hashAlgo === HASH_ALGO_VERSION &&
+          ledgerEntry?.lastStatus === 'indexed';
+
+        if (isUnchanged) {
+          await this.upsertLedgerRecord({
+            url: page.url,
+            urlNormalized,
+            agentId,
+            ingestionId: page.ingestionId,
+            sourceId: page.sourceId,
+            status: 'indexed',
+            doc,
+            contentHash: newHash,
+          });
+          results.push({
+            url: page.url,
+            urlNormalized,
+            outcome: 'unchanged',
+            documentId: doc.id,
+            contentHash: newHash,
+            cardEligible: Boolean((extracted.metadata as { cardEligible?: boolean }).cardEligible),
+            type: (extracted.metadata as { type?: string }).type,
+          });
+          continue;
+        }
+
+        await this.upsertLedgerRecord({
+          url: page.url,
+          urlNormalized,
+          agentId,
+          ingestionId: page.ingestionId,
+          sourceId: page.sourceId,
+          status: 'indexed',
+          doc,
+        });
+        documents.push(doc);
+        pendingHashes.set(doc.id, { urlNormalized, sourceId: page.sourceId, contentHash: newHash });
+        results.push({
+          url: page.url,
+          urlNormalized,
+          outcome: ledgerEntry?.contentHash ? 'changed' : 'added',
+          documentId: doc.id,
+          contentHash: newHash,
+          cardEligible: Boolean((extracted.metadata as { cardEligible?: boolean }).cardEligible),
+          type: (extracted.metadata as { type?: string }).type,
+        });
+      } catch (error) {
+        results.push(this.ledgerWriteFailure(page.url, urlNormalized, error));
+      }
+    }
+
+    if (documents.length > 0) {
+      try {
+        const ingestResult = await this.ingest(documents, options);
+        const failedIds = new Set((ingestResult.errors ?? []).map((error) => error.id));
+        for (const result of results) {
+          if (result.documentId && failedIds.has(result.documentId)) {
+            result.outcome = 'failed';
+            result.error = ingestResult.errors?.find((error) => error.id === result.documentId)?.error;
+            result.errorCode = 'embedding_failed';
+          }
+        }
+        const toStamp = [...pendingHashes.entries()]
+          .filter(([docId]) => !failedIds.has(docId))
+          .map(([, entry]) => entry);
+        await this.stampContentHashes(toStamp, agentId);
+      } catch (error) {
+        for (const result of results) {
+          if (result.documentId && pendingHashes.has(result.documentId)) {
+            result.outcome = 'failed';
+            result.error = error instanceof Error ? error.message : String(error);
+            result.errorCode = 'content_write_failed';
+          }
+        }
+      }
+    }
+
+    return {
+      indexed: results.filter((result) => result.outcome === 'added' || result.outcome === 'changed').length,
+      failed: results.filter((result) => result.outcome === 'failed').length,
+      pages: results,
+    };
+  }
+
+  private ledgerWriteFailure(
+    url: string,
+    urlNormalized: string,
+    error: unknown,
+  ): ProvidedPageResult {
+    return {
+      url,
+      urlNormalized,
+      outcome: 'failed',
+      error: error instanceof Error ? error.message : String(error),
+      errorCode: 'ledger_write_failed',
+    };
+  }
+
+  private ledgerStatusFor(status: ProvidedPageStatus): CrawlLedgerStatus {
+    const statuses: Record<ProvidedPageStatus, CrawlLedgerStatus> = {
+      ok: 'indexed',
+      non_html: 'non_html',
+      timeout: 'error',
+      blocked: 'blocked_suspected',
+      robots_denied: 'blocked_suspected',
+      too_large: 'too_small',
+      ssrf_denied: 'blocked_suspected',
+      render_failed: 'error',
+      error: 'error',
+    };
+    return statuses[status];
   }
 
   private pushPageStatus(

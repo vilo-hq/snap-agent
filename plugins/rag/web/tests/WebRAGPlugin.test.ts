@@ -2312,4 +2312,90 @@ describe('WebRAGPlugin', () => {
       expect(mongoLedger.mockUpdateOne).not.toHaveBeenCalled();
     });
   });
+
+  describe('ingestFromHtml', () => {
+    const page = (over: Partial<any> = {}) => ({
+      url: 'https://a.test/p/1',
+      status: 'ok' as const,
+      html: '<html><head><title>Ficha</title></head><body>' + 'z'.repeat(3000) + '</body></html>',
+      sourceId: 'src-1',
+      ingestionId: 'ing-1',
+      ...over,
+    });
+
+    it('devuelve un resultado por página, en orden', async () => {
+      const result = await plugin.ingestFromHtml(
+        [page(), page({ url: 'https://a.test/p/2' })],
+        {},
+        { agentId: 'agent-1' },
+      );
+      expect(result.pages).toHaveLength(2);
+      expect(result.pages[0].url).toBe('https://a.test/p/1');
+      expect(result.pages[1].url).toBe('https://a.test/p/2');
+    });
+
+    it('conserva todas las posiciones cuando una URL no se puede normalizar', async () => {
+      mongoLedger.mockUpdateOne.mockClear();
+      const result = await plugin.ingestFromHtml(
+        [page(), page({ url: 'no es una url' }), page({ url: 'https://a.test/p/3' })],
+        {},
+        { agentId: 'agent-1' },
+      );
+
+      expect(result.pages).toHaveLength(3);
+      expect(result.pages.map((entry) => entry.url)).toEqual([
+        'https://a.test/p/1',
+        'no es una url',
+        'https://a.test/p/3',
+      ]);
+      expect(result.pages[1]).toMatchObject({
+        urlNormalized: null,
+        outcome: 'failed',
+        errorCode: 'invalid_url',
+      });
+      expect(mongoLedger.mockUpdateOne.mock.calls.some(
+        ([, update]) => update.$set.url === 'no es una url',
+      )).toBe(false);
+    });
+
+    it('marca added una página nueva y expone su elegibilidad sin persistir fetchHash', async () => {
+      const result = await plugin.ingestFromHtml(
+        [page({ fetchHash: 'fetch-hash-del-adquiriente' })],
+        {},
+        { agentId: 'agent-1' },
+      );
+      expect(result.pages[0].outcome).toBe('added');
+      expect(typeof result.pages[0].cardEligible).toBe('boolean');
+      expect(result.pages[0].documentId?.startsWith('src-1:')).toBe(true);
+      const persistedFetchHash = [
+        ...mongoLedger.mockUpdateOne.mock.calls,
+        ...mongoLedger.mockBulkWrite.mock.calls,
+      ].some((call) => JSON.stringify(call).includes('fetch-hash-del-adquiriente'));
+      expect(persistedFetchHash).toBe(false);
+    });
+
+    it('no embeddea de nuevo si el contentHash no se movió', async () => {
+      const first = await plugin.ingestFromHtml([page()], {}, { agentId: 'agent-1' });
+      const hash = first.pages[0].contentHash!;
+      mongoLedger.mockFindOne.mockResolvedValue({
+        contentHash: hash,
+        hashAlgo: 'sha256-v1',
+        lastStatus: 'indexed',
+      });
+
+      const second = await plugin.ingestFromHtml([page()], {}, { agentId: 'agent-1' });
+      expect(second.pages[0].outcome).toBe('unchanged');
+      expect(second.indexed).toBe(0);
+    });
+
+    it('no intenta extraer una página que el adquiriente no pudo traer', async () => {
+      const result = await plugin.ingestFromHtml(
+        [page({ status: 'robots_denied', html: undefined })],
+        {},
+        { agentId: 'agent-1' },
+      );
+      expect(result.pages[0].outcome).toBe('skipped_status');
+      expect(result.indexed).toBe(0);
+    });
+  });
 });

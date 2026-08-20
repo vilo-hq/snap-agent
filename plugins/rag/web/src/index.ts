@@ -70,4 +70,10 @@ export type {
   AffirmPageInput,
   AffirmPageResult,
   AffirmPagesResult,
+  ProvidedPage,
+  ProvidedPageStatus,
+  ProvidedPageOutcome,
+  ProvidedPageResult,
+  IngestFromHtmlResult,
+  LedgerUrlMapping,
 } from './types';
