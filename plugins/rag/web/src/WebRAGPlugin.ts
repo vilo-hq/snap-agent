@@ -383,6 +383,42 @@ export class WebRAGPlugin implements RAGPlugin {
     );
   }
 
+  /**
+   * Estampa el `contentHash` de las páginas cuyo embedding ya está persistido.
+   *
+   * Existe porque el hash responde "¿hace falta re-embeddear?", y contestarlo que sí antes de que
+   * el embedding exista convierte un fallo transitorio en una página que no se indexa nunca más.
+   */
+  private async stampContentHashes(
+    entries: Array<{ urlNormalized: string; sourceId?: string; contentHash: string }>,
+    agentId: string,
+  ): Promise<void> {
+    if (entries.length === 0) return;
+    const col = await this.getLedgerCollection();
+    await col.bulkWrite(
+      entries.map((entry) => ({
+        updateOne: {
+          // Misma identidad que el índice único, con el campo SIEMPRE presente. Omitirlo cuando
+          // falta dejaría el filtro abierto y el hash podría caer en la fila de otro source que
+          // comparte la URL — que es justo lo que el índice nuevo hace posible.
+          filter: {
+            tenantId: this.config.tenantId,
+            agentId,
+            urlNormalized: entry.urlNormalized,
+            ...ledgerScope(entry.sourceId),
+          },
+          update: {
+            $set: {
+              contentHash: entry.contentHash,
+              hashAlgo: HASH_ALGO_VERSION,
+              updatedAt: new Date(),
+            },
+          },
+        },
+      })),
+    );
+  }
+
   private pushPageStatus(
     list: CrawlPageStatusEntry[],
     max: number,
@@ -2309,6 +2345,11 @@ export class WebRAGPlugin implements RAGPlugin {
     let urlsFailed = 0;
     const errors: Array<{ id: string; error: string }> = [];
     const documents: RAGDocument[] = [];
+    /** docId → fila de ledger a estampar, sólo si su embedding termina bien. */
+    const pendingHashes = new Map<
+      string,
+      { urlNormalized: string; sourceId?: string; contentHash: string }
+    >();
     const pageStatuses: CrawlPageStatusEntry[] = [];
     const maxStatuses = ledgerOpts?.maxPageStatuses ?? 500;
 
@@ -2426,6 +2467,9 @@ export class WebRAGPlugin implements RAGPlugin {
               const changeStatus = ledgerEntry?.contentHash ? 'changed' : 'added';
               if (changeStatus === 'changed') counters.changed++;
               else counters.added++;
+              // SIN contentHash a propósito: los embeddings todavía no existen. Se estampa después
+              // de que `ingest` confirme el documento (ver stampContentHashes). Si esto se rompe,
+              // el hash viejo sobrevive y la página se vuelve a intentar — que es el lado seguro.
               await this.upsertLedgerRecord({
                 url,
                 urlNormalized,
@@ -2435,7 +2479,6 @@ export class WebRAGPlugin implements RAGPlugin {
                 status: crawlSt,
                 doc,
                 diag,
-                contentHash: newHash,
               });
               this.pushPageStatus(pageStatuses, maxStatuses, {
                 url,
@@ -2457,7 +2500,7 @@ export class WebRAGPlugin implements RAGPlugin {
                 status: crawlSt,
                 error: diag?.errorMessage,
               });
-              return { kind: 'doc' as const, doc, url };
+              return { kind: 'doc' as const, doc, url, urlNormalized, sourceId, pendingHash: newHash };
             }
 
             // Non-indexable pages (too_small / non_html / blocked / error-without-throw): no hash.
@@ -2534,6 +2577,13 @@ export class WebRAGPlugin implements RAGPlugin {
           }
           if (v && typeof v === 'object' && 'kind' in v && v.kind === 'doc' && v.doc) {
             documents.push(v.doc);
+            if (v.pendingHash && v.urlNormalized) {
+              pendingHashes.set(v.doc.id, {
+                urlNormalized: v.urlNormalized,
+                sourceId: v.sourceId,
+                contentHash: v.pendingHash,
+              });
+            }
             urlsCrawled++;
           }
         } else if (result.status === 'rejected') {
@@ -2570,6 +2620,13 @@ export class WebRAGPlugin implements RAGPlugin {
       if (ingestResult.errors) {
         errors.push(...ingestResult.errors);
       }
+
+      // Recién ahora el embedding existe: se estampa el hash de los documentos que NO fallaron.
+      const failedIds = new Set((ingestResult.errors ?? []).map((e) => e.id));
+      const toStamp = [...pendingHashes.entries()]
+        .filter(([docId]) => !failedIds.has(docId))
+        .map(([, entry]) => entry);
+      await this.stampContentHashes(toStamp, options?.agentId ?? 'shared');
     }
 
     return {

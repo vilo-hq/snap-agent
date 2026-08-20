@@ -1778,11 +1778,15 @@ describe('WebRAGPlugin', () => {
 
       expect(openaiMock.create).toHaveBeenCalled();
       expect(result.metadata?.counters?.added).toBe(1);
-      const upsert = mongoLedger.mockUpdateOne.mock.calls.find(
-        (c) => c[1]?.$set?.lastStatus === 'indexed' && c[1]?.$set?.contentHash,
+      // El hash se estampa después del ingest, cuando el embedding ya existe.
+      const hashStamp = mongoLedger.mockBulkWrite.mock.calls.find(
+        ([operations]) => operations.some((op: any) => op.updateOne?.update?.$set?.contentHash),
       );
-      expect(upsert).toBeDefined();
-      expect(upsert?.[1]?.$set?.hashAlgo).toBe('sha256-v1');
+      const hashUpdate = hashStamp?.[0].find(
+        (op: any) => op.updateOne?.update?.$set?.contentHash,
+      )?.updateOne.update.$set;
+      expect(hashUpdate).toBeDefined();
+      expect(hashUpdate?.hashAlgo).toBe('sha256-v1');
       await ledgerPlugin.disconnect();
     });
 
@@ -1807,11 +1811,14 @@ describe('WebRAGPlugin', () => {
         { type: 'page', concurrency: 1, stripQueryParams: true, extractLinks: true, metadata: { ingestionId: 'ing-1' } },
         { agentId: 'a1' },
       );
-      const firstUpsert = mongoLedger.mockUpdateOne.mock.calls.find(
-        (c) => c[1]?.$set?.lastStatus === 'indexed' && c[1]?.$set?.contentHash,
+      // El hash se estampa después del ingest, cuando el embedding ya existe.
+      const firstHashStamp = mongoLedger.mockBulkWrite.mock.calls.find(
+        ([operations]) => operations.some((op: any) => op.updateOne?.update?.$set?.contentHash),
       );
-      expect(firstUpsert).toBeDefined();
-      const contentHash = firstUpsert![1].$set.contentHash as string;
+      const contentHash = firstHashStamp?.[0].find(
+        (op: any) => op.updateOne?.update?.$set?.contentHash,
+      )?.updateOne.update.$set.contentHash as string;
+      expect(contentHash).toBeDefined();
       expect(openaiMock.create).toHaveBeenCalled();
 
       // Pass 2 — same content, ledger now has the matching hash → unchanged.
@@ -2223,6 +2230,32 @@ describe('WebRAGPlugin', () => {
       expect(scopes).toContain('src-2');
       // Y ninguna llamada quedó sin el campo.
       expect(mongoLedger.mockUpdateOne.mock.calls.every(([filter]) => 'sourceId' in filter)).toBe(true);
+    });
+  });
+
+  describe('crawlUrls: orden entre hash y embeddings', () => {
+    it('no guarda el contentHash si el ingest falla', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        headers: { get: () => 'text/html' },
+        text: async () => `<html><body>${'z'.repeat(5000)}</body></html>`,
+      });
+      // El crawl trae una página nueva, pero embeddear explota.
+      vi.spyOn(plugin as any, 'generateEmbeddingsBatch').mockRejectedValue(new Error('openai down'));
+
+      await plugin.ingestFromUrls(['https://a.test/p/9'], { crawlLedger: { enabled: true } }, {
+        agentId: 'agent-1',
+      });
+
+      const wroteHash = mongoLedger.mockUpdateOne.mock.calls.some(
+        ([, update]: [unknown, { $set?: Record<string, unknown> }]) =>
+          update?.$set?.contentHash !== undefined,
+      );
+      expect(wroteHash).toBe(false);
+      const stampedHash = mongoLedger.mockBulkWrite.mock.calls.some(
+        ([operations]) => operations.some((op: any) => op.updateOne?.update?.$set?.contentHash !== undefined),
+      );
+      expect(stampedHash).toBe(false);
     });
   });
 });
