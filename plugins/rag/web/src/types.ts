@@ -174,8 +174,8 @@ export interface CrawlLedgerDocument {
   agentId: string;
   /** Correlates ledger rows with a single ingest run (from crawl metadata.ingestionId). */
   ingestionId?: string;
-  /** Durable knowledge source this URL belongs to (from crawl metadata.sourceId). */
-  sourceId?: string;
+  /** Durable knowledge source this URL belongs to; null is the legacy scope and filters always include this field. */
+  sourceId?: string | null;
   urlNormalized: string;
   url: string;
   domain: string;
@@ -192,6 +192,79 @@ export interface CrawlLedgerDocument {
   httpStatus?: number;
   errorMessage?: string;
   updatedAt: Date;
+}
+
+export interface AffirmPageInput {
+  /** `requestedUrl` exactly as the acquirer reported it. This is the key. */
+  url: string;
+  sourceId: string;
+  ingestionId: string;
+}
+
+export interface LedgerUrlConfig {
+  stripQueryParams?: boolean;
+}
+
+export interface AffirmPageResult {
+  url: string;
+  urlNormalized: string | null;
+  outcome: 'affirmed' | 'failed';
+  error?: string;
+  errorCode?: 'invalid_url' | 'ledger_write_failed';
+}
+
+export interface AffirmPagesResult {
+  affirmed: number;
+  /** `pages.length === input.length`; same order, never truncated. */
+  pages: AffirmPageResult[];
+}
+
+/** The status the acquirer closed the page with. Closed enum owned by the crawler. */
+export type ProvidedPageStatus =
+  | 'ok' | 'non_html' | 'timeout' | 'blocked'
+  | 'robots_denied' | 'too_large' | 'ssrf_denied' | 'render_failed' | 'error';
+
+export interface ProvidedPage {
+  /** `requestedUrl`, exactly as the acquirer reported it. This is the key; never the final URL. */
+  url: string;
+  status: ProvidedPageStatus;
+  /** Required only when `status === 'ok'`. */
+  html?: string;
+  /** The acquirer's fingerprint; the server persists it only after validating the per-page commit. */
+  fetchHash?: string;
+  sourceId: string;
+  ingestionId: string;
+}
+
+export type ProvidedPageOutcome =
+  | 'added' | 'changed' | 'unchanged' | 'not_indexable' | 'skipped_status' | 'failed';
+
+export interface ProvidedPageResult {
+  url: string;
+  urlNormalized: string | null;
+  outcome: ProvidedPageOutcome;
+  documentId?: string;
+  contentHash?: string;
+  cardEligible?: boolean;
+  type?: string;
+  error?: string;
+  errorCode?:
+    | 'invalid_url'
+    | 'ledger_write_failed'
+    | 'embedding_failed'
+    | 'content_write_failed';
+}
+
+export interface IngestFromHtmlResult {
+  indexed: number;
+  failed: number;
+  /** One result per input page, in the same order. Never truncated. */
+  pages: ProvidedPageResult[];
+}
+
+export interface LedgerUrlMapping {
+  requestedUrl: string;
+  urlNormalized: string | null;
 }
 
 /**
@@ -627,4 +700,3 @@ export interface WebURLIngestResult extends WebIngestResult {
   fetchedAt: Date;
   documentsFetched: number;
 }
-

@@ -3,6 +3,7 @@ export {
   extractPageFromHtml,
   bodyTextLengthHint,
   urlToDocumentId,
+  sourceScopedDocumentId,
 } from './htmlPageExtract';
 export type { HtmlPageExtractOptions, HtmlPageExtractResult } from './htmlPageExtract';
 export { extractProductMetadata, parsePrice, normalizeCurrency, normalizeAvailability } from './productMetadata';
@@ -65,5 +66,14 @@ export type {
   BulkProgressPhase,
   WebIngestResult,
   WebURLIngestResult,
+  LedgerUrlConfig,
+  AffirmPageInput,
+  AffirmPageResult,
+  AffirmPagesResult,
+  ProvidedPage,
+  ProvidedPageStatus,
+  ProvidedPageOutcome,
+  ProvidedPageResult,
+  IngestFromHtmlResult,
+  LedgerUrlMapping,
 } from './types';
-

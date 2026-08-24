@@ -1,7 +1,32 @@
 import { describe, it, expect } from 'vitest';
-import { extractPageFromHtml } from '../src/htmlPageExtract';
+import { extractPageFromHtml, sourceScopedDocumentId } from '../src/htmlPageExtract';
 
 const BODY = '<p>' + 'x'.repeat(60) + '</p>';
+
+describe('sourceScopedDocumentId', () => {
+  it('is deterministic', () => {
+    const a = sourceScopedDocumentId('src-1', 'https://x.test/p/1');
+    const b = sourceScopedDocumentId('src-1', 'https://x.test/p/1');
+    expect(a).toBe(b);
+  });
+
+  it('distinguishes two long URLs that urlToDocumentId would collapse', () => {
+    const base = 'https://x.test/' + 'a'.repeat(120);
+    const first = sourceScopedDocumentId('src-1', base + '/one');
+    const second = sourceScopedDocumentId('src-1', base + '/two');
+    expect(first).not.toBe(second);
+  });
+
+  it('distinguishes the same URL under different sources', () => {
+    const first = sourceScopedDocumentId('src-1', 'https://x.test/p/1');
+    const second = sourceScopedDocumentId('src-2', 'https://x.test/p/1');
+    expect(first).not.toBe(second);
+  });
+
+  it('puts the sourceId up front so a row stays readable in the database', () => {
+    expect(sourceScopedDocumentId('src-1', 'https://x.test/p/1').startsWith('src-1:')).toBe(true);
+  });
+});
 
 describe('extractPageFromHtml', () => {
   it('returns full metadata including product fields', () => {

@@ -30,6 +30,7 @@ import { createHash } from 'node:crypto';
 import {
   bodyTextLengthHint as htmlBodyTextLengthHint,
   extractPageFromHtml,
+  sourceScopedDocumentId,
   urlToDocumentId,
 } from './htmlPageExtract';
 import { runWithConcurrency } from './concurrency';
@@ -61,6 +62,15 @@ import type {
   CrawlProgressCallback,
   CrawlProgressUpdate,
   CrawlPageEvent,
+  AffirmPageInput,
+  LedgerUrlConfig,
+  AffirmPageResult,
+  AffirmPagesResult,
+  ProvidedPage,
+  ProvidedPageStatus,
+  ProvidedPageResult,
+  IngestFromHtmlResult,
+  LedgerUrlMapping,
 } from './types';
 
 function bulkOpCurrentUrl(op: BulkOperation): string | undefined {
@@ -90,6 +100,11 @@ function isUrlListingInsert(document: { metadata?: Record<string, unknown> }): b
  * changed. `contentHash` values are only comparable within the same version.
  */
 const HASH_ALGO_VERSION = 'sha256-v1';
+
+/** The scope of a ledger operation. `null` is the legacy scope, not "any". */
+function ledgerScope(sourceId: string | undefined): { sourceId: string | null } {
+  return { sourceId: sourceId ?? null };
+}
 
 /**
  * Normalize page text before hashing so non-semantic differences (whitespace, line endings, Unicode
@@ -193,8 +208,15 @@ export class WebRAGPlugin implements RAGPlugin {
     const col = db.collection<CrawlLedgerDocument>(name);
     if (!this.ledgerIndexesEnsured) {
       this.ledgerIndexesEnsured = true;
+      // The identity of a ledger row includes the source. Without it, two sources of the same agent
+      // that share a URL share a row: each upsert overwrites the other's sourceId and ingestionId,
+      // and the re-crawl diff stops belonging to a single corpus.
+      //
+      // Migrating the old key is the server's job; here we only declare the new one. See
+      // "Orden entre repos" in the plan: this package must be published BEFORE that migration,
+      // otherwise the old SDK recreates the index without sourceId and undoes it.
       await col.createIndex(
-        { tenantId: 1, agentId: 1, urlNormalized: 1 },
+        { tenantId: 1, agentId: 1, sourceId: 1, urlNormalized: 1 },
         { unique: true },
       );
       await col.createIndex({ tenantId: 1, agentId: 1, ingestionId: 1, lastCrawledAt: -1 });
@@ -251,6 +273,17 @@ export class WebRAGPlugin implements RAGPlugin {
     return this.normalizeWebsiteUrl(url, stripQuery);
   }
 
+  /** One result per input, in the same order. Writes nothing. */
+  normalizeLedgerUrls(
+    requestedUrls: readonly string[],
+    config: LedgerUrlConfig = {},
+  ): LedgerUrlMapping[] {
+    return requestedUrls.map((url) => ({
+      requestedUrl: url,
+      urlNormalized: this.normalizeLedgerUrl(url, config.stripQueryParams ?? false),
+    }));
+  }
+
   private shouldSkipLedger(
     entry: CrawlLedgerDocument | null | undefined,
     ttlMsIndexed: number,
@@ -273,13 +306,15 @@ export class WebRAGPlugin implements RAGPlugin {
 
   private async findLedgerEntry(
     urlNormalized: string,
-    agentId: string
+    agentId: string,
+    sourceId: string | undefined,
   ): Promise<CrawlLedgerDocument | null> {
     const col = await this.getLedgerCollection();
     return col.findOne({
       tenantId: this.config.tenantId,
       agentId,
       urlNormalized,
+      ...ledgerScope(sourceId),
     });
   }
 
@@ -362,10 +397,306 @@ export class WebRAGPlugin implements RAGPlugin {
         tenantId: this.config.tenantId,
         agentId: params.agentId,
         urlNormalized: params.urlNormalized,
+        ...ledgerScope(params.sourceId),
       },
       { $set },
       { upsert: true }
     );
+  }
+
+  /**
+   * Stamps the `contentHash` of pages whose embedding is already persisted.
+   *
+   * It exists because the hash answers "does this need re-embedding?", and answering no before the
+   * embedding exists turns a transient failure into a page that never gets indexed again.
+   */
+  private async stampContentHashes(
+    entries: Array<{ urlNormalized: string; sourceId?: string; contentHash: string }>,
+    agentId: string,
+  ): Promise<void> {
+    if (entries.length === 0) return;
+    const col = await this.getLedgerCollection();
+    await col.bulkWrite(
+      entries.map((entry) => ({
+        updateOne: {
+          // Same identity as the unique index, with the field ALWAYS present. Omitting it when it
+          // is missing would leave the filter open, and the hash could land on the row of another
+          // source that shares the URL — which is exactly what the new index makes possible.
+          filter: {
+            tenantId: this.config.tenantId,
+            agentId,
+            urlNormalized: entry.urlNormalized,
+            ...ledgerScope(entry.sourceId),
+          },
+          update: {
+            $set: {
+              contentHash: entry.contentHash,
+              hashAlgo: HASH_ALGO_VERSION,
+              updatedAt: new Date(),
+            },
+          },
+        },
+      })),
+    );
+  }
+
+  /**
+   * Marks pages as seen by this ingestion without extracting them again.
+   *
+   * The acquirer decides a page did not change by comparing its own HTML hash, and therefore does
+   * not download the body. The row still has to be affirmed for the current `ingestionId`: without
+   * this, the ingestion's closing step reads those pages as absent and deletes them — meaning a
+   * re-crawl where nothing changed would empty the source.
+   *
+   * It does not touch `contentHash`: the page was not extracted again, so there is nothing new to
+   * assert about its content.
+   */
+  async affirmPages(
+    pages: readonly AffirmPageInput[],
+    config: LedgerUrlConfig = {},
+    options?: IngestOptions,
+  ): Promise<AffirmPagesResult> {
+    if (pages.length === 0) return { affirmed: 0, pages: [] };
+    const agentId = options?.agentId || 'shared';
+    const mappings = this.normalizeLedgerUrls(
+      pages.map((page) => page.url),
+      config,
+    );
+    const results: AffirmPageResult[] = [];
+
+    for (const [index, page] of pages.entries()) {
+      const mapping = mappings[index]!;
+      if (mapping.urlNormalized === null) {
+        results.push({
+          url: page.url,
+          urlNormalized: null,
+          outcome: 'failed',
+          errorCode: 'invalid_url',
+        });
+        continue;
+      }
+      try {
+        await this.upsertLedgerRecord({
+          url: page.url,
+          urlNormalized: mapping.urlNormalized,
+          agentId,
+          ingestionId: page.ingestionId,
+          sourceId: page.sourceId,
+          status: 'indexed',
+        });
+        results.push({ url: page.url, urlNormalized: mapping.urlNormalized, outcome: 'affirmed' });
+      } catch (error) {
+        results.push({
+          url: page.url,
+          urlNormalized: mapping.urlNormalized,
+          outcome: 'failed',
+          error: error instanceof Error ? error.message : String(error),
+          errorCode: 'ledger_write_failed',
+        });
+      }
+    }
+    return {
+      affirmed: results.filter((result) => result.outcome === 'affirmed').length,
+      pages: results,
+    };
+  }
+
+  /**
+   * Ingests already-acquired pages. The caller brings the HTML; this method never hits the network.
+   *
+   * It does exactly what `crawlUrls` does AFTER the fetch — extract, decide whether it changed,
+   * embed and write the ledger — and returns one result per page. The hash/embedding ordering is
+   * the one from 0.5.4: the hash is stamped only once the embedding exists.
+   */
+  async ingestFromHtml(
+    pages: ProvidedPage[],
+    config: UrlListConfig = {},
+    options?: IngestOptions,
+  ): Promise<IngestFromHtmlResult> {
+    const agentId = options?.agentId || 'shared';
+    const results: ProvidedPageResult[] = [];
+    const documents: RAGDocument[] = [];
+    const pendingHashes = new Map<
+      string,
+      { urlNormalized: string; sourceId?: string; contentHash: string }
+    >();
+    const mappings = this.normalizeLedgerUrls(
+      pages.map((page) => page.url),
+      { stripQueryParams: config.stripQueryParams },
+    );
+
+    for (const [index, page] of pages.entries()) {
+      const mapping = mappings[index]!;
+      if (mapping.urlNormalized === null) {
+        results.push({
+          url: page.url,
+          urlNormalized: null,
+          outcome: 'failed',
+          errorCode: 'invalid_url',
+        });
+        continue;
+      }
+      const urlNormalized = mapping.urlNormalized;
+      if (page.status !== 'ok' || !page.html) {
+        try {
+          await this.upsertLedgerRecord({
+            url: page.url,
+            urlNormalized,
+            agentId,
+            ingestionId: page.ingestionId,
+            sourceId: page.sourceId,
+            status: this.ledgerStatusFor(page.status),
+          });
+          results.push({ url: page.url, urlNormalized, outcome: 'skipped_status' });
+        } catch (error) {
+          results.push(this.ledgerWriteFailure(page.url, urlNormalized, error));
+        }
+        continue;
+      }
+
+      const extracted = extractPageFromHtml(page.url, page.html, config as SitemapConfig);
+      if (!extracted.indexable) {
+        try {
+          await this.upsertLedgerRecord({
+            url: page.url,
+            urlNormalized,
+            agentId,
+            ingestionId: page.ingestionId,
+            sourceId: page.sourceId,
+            status: 'too_small',
+          });
+          results.push({ url: page.url, urlNormalized, outcome: 'not_indexable' });
+        } catch (error) {
+          results.push(this.ledgerWriteFailure(page.url, urlNormalized, error));
+        }
+        continue;
+      }
+
+      const newHash = computeContentHash(extracted.content);
+      const doc: RAGDocument = {
+        id: sourceScopedDocumentId(page.sourceId, page.url),
+        content: extracted.content,
+        metadata: {
+          ...(extracted.metadata as RAGDocument['metadata']),
+          sourceId: page.sourceId,
+          ingestionId: page.ingestionId,
+        },
+      };
+      try {
+        const ledgerEntry = await this.findLedgerEntry(urlNormalized, agentId, page.sourceId);
+        const isUnchanged =
+          ledgerEntry?.contentHash === newHash &&
+          ledgerEntry?.hashAlgo === HASH_ALGO_VERSION &&
+          ledgerEntry?.lastStatus === 'indexed';
+
+        if (isUnchanged) {
+          await this.upsertLedgerRecord({
+            url: page.url,
+            urlNormalized,
+            agentId,
+            ingestionId: page.ingestionId,
+            sourceId: page.sourceId,
+            status: 'indexed',
+            doc,
+            contentHash: newHash,
+          });
+          results.push({
+            url: page.url,
+            urlNormalized,
+            outcome: 'unchanged',
+            documentId: doc.id,
+            contentHash: newHash,
+            cardEligible: Boolean((extracted.metadata as { cardEligible?: boolean }).cardEligible),
+            type: (extracted.metadata as { type?: string }).type,
+          });
+          continue;
+        }
+
+        await this.upsertLedgerRecord({
+          url: page.url,
+          urlNormalized,
+          agentId,
+          ingestionId: page.ingestionId,
+          sourceId: page.sourceId,
+          status: 'indexed',
+          doc,
+        });
+        documents.push(doc);
+        pendingHashes.set(doc.id, { urlNormalized, sourceId: page.sourceId, contentHash: newHash });
+        results.push({
+          url: page.url,
+          urlNormalized,
+          outcome: ledgerEntry?.contentHash ? 'changed' : 'added',
+          documentId: doc.id,
+          contentHash: newHash,
+          cardEligible: Boolean((extracted.metadata as { cardEligible?: boolean }).cardEligible),
+          type: (extracted.metadata as { type?: string }).type,
+        });
+      } catch (error) {
+        results.push(this.ledgerWriteFailure(page.url, urlNormalized, error));
+      }
+    }
+
+    if (documents.length > 0) {
+      try {
+        const ingestResult = await this.ingest(documents, options);
+        const failedIds = new Set((ingestResult.errors ?? []).map((error) => error.id));
+        for (const result of results) {
+          if (result.documentId && failedIds.has(result.documentId)) {
+            result.outcome = 'failed';
+            result.error = ingestResult.errors?.find((error) => error.id === result.documentId)?.error;
+            result.errorCode = 'embedding_failed';
+          }
+        }
+        const toStamp = [...pendingHashes.entries()]
+          .filter(([docId]) => !failedIds.has(docId))
+          .map(([, entry]) => entry);
+        await this.stampContentHashes(toStamp, agentId);
+      } catch (error) {
+        for (const result of results) {
+          if (result.documentId && pendingHashes.has(result.documentId)) {
+            result.outcome = 'failed';
+            result.error = error instanceof Error ? error.message : String(error);
+            result.errorCode = 'content_write_failed';
+          }
+        }
+      }
+    }
+
+    return {
+      indexed: results.filter((result) => result.outcome === 'added' || result.outcome === 'changed').length,
+      failed: results.filter((result) => result.outcome === 'failed').length,
+      pages: results,
+    };
+  }
+
+  private ledgerWriteFailure(
+    url: string,
+    urlNormalized: string,
+    error: unknown,
+  ): ProvidedPageResult {
+    return {
+      url,
+      urlNormalized,
+      outcome: 'failed',
+      error: error instanceof Error ? error.message : String(error),
+      errorCode: 'ledger_write_failed',
+    };
+  }
+
+  private ledgerStatusFor(status: ProvidedPageStatus): CrawlLedgerStatus {
+    const statuses: Record<ProvidedPageStatus, CrawlLedgerStatus> = {
+      ok: 'indexed',
+      non_html: 'non_html',
+      timeout: 'error',
+      blocked: 'blocked_suspected',
+      robots_denied: 'blocked_suspected',
+      too_large: 'too_small',
+      ssrf_denied: 'blocked_suspected',
+      render_failed: 'error',
+      error: 'error',
+    };
+    return statuses[status];
   }
 
   private pushPageStatus(
@@ -828,18 +1159,34 @@ export class WebRAGPlugin implements RAGPlugin {
       const chunks = chunkPlan[docIndex]!;
       const isChunked = chunks.length > 1;
 
-      // Remove any previous chunks for this document before re-ingesting
-      if (isChunked) {
-        try {
-          await collection.deleteMany({
-            tenantId: this.config.tenantId,
-            documentId: doc.id,
-            agentId,
-          });
-        } catch (error) {
-          markFailed(doc.id, error);
-          continue;
-        }
+      // Remove any previous chunks for this document before re-ingesting.
+      //
+      // Scoped by sourceId: `documentId` derives from the URL and is NOT unique across sources of
+      // the same agent, so without this filter two sources sharing a URL — or whose ids collide
+      // once truncated — delete each other's chunks.
+      //
+      // And it runs ALWAYS, not only when the document ended up chunked: if a page went from
+      // chunked to non-chunked, the conditional delete left the old chunks alive.
+      //
+      // And it deletes by BOTH id shapes: a document that previously fit in a single chunk was
+      // stored with `id: doc.id` and no `documentId`; if it is chunked now, deleting only by
+      // `documentId` leaves the old singleton alive and the page ends up duplicated.
+      const sourceId = doc.metadata?.sourceId;
+      const scope = {
+        tenantId: this.config.tenantId,
+        agentId,
+        // ALWAYS present. Omitting it when missing does not narrow less: it narrows nothing, and
+        // the delete takes out the chunks of another source that shares the document id.
+        'metadata.sourceId': typeof sourceId === 'string' && sourceId ? sourceId : null,
+      };
+      try {
+        await collection.deleteMany({
+          ...scope,
+          $or: [{ documentId: doc.id }, { id: doc.id }],
+        });
+      } catch (error) {
+        markFailed(doc.id, error);
+        continue;
       }
 
       for (let i = 0; i < chunks.length; i++) {
@@ -2278,6 +2625,11 @@ export class WebRAGPlugin implements RAGPlugin {
     let urlsFailed = 0;
     const errors: Array<{ id: string; error: string }> = [];
     const documents: RAGDocument[] = [];
+    /** docId → ledger row to stamp, only if its embedding finishes successfully. */
+    const pendingHashes = new Map<
+      string,
+      { urlNormalized: string; sourceId?: string; contentHash: string }
+    >();
     const pageStatuses: CrawlPageStatusEntry[] = [];
     const maxStatuses = ledgerOpts?.maxPageStatuses ?? 500;
 
@@ -2293,7 +2645,7 @@ export class WebRAGPlugin implements RAGPlugin {
           // Fetch the ledger row once: needed both for the pre-fetch TTL skip and for the
           // post-crawl content-hash compare (the latter applies even under forceRecrawl).
           const ledgerEntry = ledgerOpts
-            ? await this.findLedgerEntry(urlNormalized, agentId)
+            ? await this.findLedgerEntry(urlNormalized, agentId, sourceId)
             : null;
 
           // Pre-fetch TTL gate — bypassed entirely under forceRecrawl.
@@ -2395,6 +2747,9 @@ export class WebRAGPlugin implements RAGPlugin {
               const changeStatus = ledgerEntry?.contentHash ? 'changed' : 'added';
               if (changeStatus === 'changed') counters.changed++;
               else counters.added++;
+              // WITHOUT contentHash on purpose: the embeddings do not exist yet. It is stamped
+              // after `ingest` confirms the document (see stampContentHashes). If this breaks, the
+              // old hash survives and the page is retried — which is the safe side.
               await this.upsertLedgerRecord({
                 url,
                 urlNormalized,
@@ -2404,7 +2759,6 @@ export class WebRAGPlugin implements RAGPlugin {
                 status: crawlSt,
                 doc,
                 diag,
-                contentHash: newHash,
               });
               this.pushPageStatus(pageStatuses, maxStatuses, {
                 url,
@@ -2426,7 +2780,7 @@ export class WebRAGPlugin implements RAGPlugin {
                 status: crawlSt,
                 error: diag?.errorMessage,
               });
-              return { kind: 'doc' as const, doc, url };
+              return { kind: 'doc' as const, doc, url, urlNormalized, sourceId, pendingHash: newHash };
             }
 
             // Non-indexable pages (too_small / non_html / blocked / error-without-throw): no hash.
@@ -2503,6 +2857,13 @@ export class WebRAGPlugin implements RAGPlugin {
           }
           if (v && typeof v === 'object' && 'kind' in v && v.kind === 'doc' && v.doc) {
             documents.push(v.doc);
+            if (v.pendingHash && v.urlNormalized) {
+              pendingHashes.set(v.doc.id, {
+                urlNormalized: v.urlNormalized,
+                sourceId: v.sourceId,
+                contentHash: v.pendingHash,
+              });
+            }
             urlsCrawled++;
           }
         } else if (result.status === 'rejected') {
@@ -2539,6 +2900,13 @@ export class WebRAGPlugin implements RAGPlugin {
       if (ingestResult.errors) {
         errors.push(...ingestResult.errors);
       }
+
+      // Only now does the embedding exist: stamp the hash of the documents that did NOT fail.
+      const failedIds = new Set((ingestResult.errors ?? []).map((e) => e.id));
+      const toStamp = [...pendingHashes.entries()]
+        .filter(([docId]) => !failedIds.has(docId))
+        .map(([, entry]) => entry);
+      await this.stampContentHashes(toStamp, options?.agentId ?? 'shared');
     }
 
     return {
@@ -3336,4 +3704,3 @@ export class WebRAGPlugin implements RAGPlugin {
     };
   }
 }
-
