@@ -2162,7 +2162,7 @@ describe('WebRAGPlugin', () => {
     it('does not touch the chunks of another source with the same documentId', async () => {
       mongoLedger.mockDeleteMany.mockClear();
       await plugin.ingest(
-        [{ id: 'compartido', content: 'x'.repeat(5000), metadata: { type: 'detail', url: 'https://a.test/p/1', sourceId: 'src-2' } }],
+        [{ id: 'shared', content: 'x'.repeat(5000), metadata: { type: 'detail', url: 'https://a.test/p/1', sourceId: 'src-2' } }],
         { agentId: 'agent-1' },
       );
       expect(mongoLedger.mockDeleteMany.mock.calls[0][0]['metadata.sourceId']).toBe('src-2');
@@ -2174,7 +2174,7 @@ describe('WebRAGPlugin', () => {
         [
           {
             id: 'doc-b',
-            content: 'corto',
+            content: 'short',
             metadata: { type: 'detail', url: 'https://a.test/p/2', sourceId: 'src-1' },
           },
         ],

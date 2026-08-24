@@ -4,7 +4,7 @@ import { extractPageFromHtml, sourceScopedDocumentId } from '../src/htmlPageExtr
 const BODY = '<p>' + 'x'.repeat(60) + '</p>';
 
 describe('sourceScopedDocumentId', () => {
-  it('es determinista', () => {
+  it('is deterministic', () => {
     const a = sourceScopedDocumentId('src-1', 'https://x.test/p/1');
     const b = sourceScopedDocumentId('src-1', 'https://x.test/p/1');
     expect(a).toBe(b);
@@ -12,18 +12,18 @@ describe('sourceScopedDocumentId', () => {
 
   it('distinguishes two long URLs that urlToDocumentId would collapse', () => {
     const base = 'https://x.test/' + 'a'.repeat(120);
-    const uno = sourceScopedDocumentId('src-1', base + '/uno');
-    const dos = sourceScopedDocumentId('src-1', base + '/dos');
-    expect(uno).not.toBe(dos);
+    const first = sourceScopedDocumentId('src-1', base + '/one');
+    const second = sourceScopedDocumentId('src-1', base + '/two');
+    expect(first).not.toBe(second);
   });
 
-  it('distingue la misma URL en sources distintos', () => {
-    const uno = sourceScopedDocumentId('src-1', 'https://x.test/p/1');
-    const dos = sourceScopedDocumentId('src-2', 'https://x.test/p/1');
-    expect(uno).not.toBe(dos);
+  it('distinguishes the same URL under different sources', () => {
+    const first = sourceScopedDocumentId('src-1', 'https://x.test/p/1');
+    const second = sourceScopedDocumentId('src-2', 'https://x.test/p/1');
+    expect(first).not.toBe(second);
   });
 
-  it('lleva el sourceId por delante para que sea legible en la base', () => {
+  it('puts the sourceId up front so a row stays readable in the database', () => {
     expect(sourceScopedDocumentId('src-1', 'https://x.test/p/1').startsWith('src-1:')).toBe(true);
   });
 });
