@@ -101,7 +101,7 @@ function isUrlListingInsert(document: { metadata?: Record<string, unknown> }): b
  */
 const HASH_ALGO_VERSION = 'sha256-v1';
 
-/** El ámbito de una operación de ledger. `null` es el ámbito legacy, no "cualquiera". */
+/** The scope of a ledger operation. `null` is the legacy scope, not "any". */
 function ledgerScope(sourceId: string | undefined): { sourceId: string | null } {
   return { sourceId: sourceId ?? null };
 }
@@ -208,13 +208,13 @@ export class WebRAGPlugin implements RAGPlugin {
     const col = db.collection<CrawlLedgerDocument>(name);
     if (!this.ledgerIndexesEnsured) {
       this.ledgerIndexesEnsured = true;
-      // La identidad de una fila de ledger incluye el source. Sin él, dos sources del mismo agente
-      // que compartan una URL comparten una fila: cada upsert le pisa al otro el sourceId y el
-      // ingestionId, y el diff de re-crawl deja de pertenecer a un corpus.
+      // The identity of a ledger row includes the source. Without it, two sources of the same agent
+      // that share a URL share a row: each upsert overwrites the other's sourceId and ingestionId,
+      // and the re-crawl diff stops belonging to a single corpus.
       //
-      // La migración de la clave vieja la hace el server; acá sólo se declara la nueva. Ver
-      // "Orden entre repos" en el plan: este paquete tiene que publicarse ANTES de esa migración,
-      // porque si no el SDK viejo vuelve a crear el índice sin sourceId y la deshace.
+      // Migrating the old key is the server's job; here we only declare the new one. See
+      // "Orden entre repos" in the plan: this package must be published BEFORE that migration,
+      // otherwise the old SDK recreates the index without sourceId and undoes it.
       await col.createIndex(
         { tenantId: 1, agentId: 1, sourceId: 1, urlNormalized: 1 },
         { unique: true },
@@ -273,7 +273,7 @@ export class WebRAGPlugin implements RAGPlugin {
     return this.normalizeWebsiteUrl(url, stripQuery);
   }
 
-  /** Un resultado por entrada, en el mismo orden. No escribe. */
+  /** One result per input, in the same order. Writes nothing. */
   normalizeLedgerUrls(
     requestedUrls: readonly string[],
     config: LedgerUrlConfig = {},
@@ -405,10 +405,10 @@ export class WebRAGPlugin implements RAGPlugin {
   }
 
   /**
-   * Estampa el `contentHash` de las páginas cuyo embedding ya está persistido.
+   * Stamps the `contentHash` of pages whose embedding is already persisted.
    *
-   * Existe porque el hash responde "¿hace falta re-embeddear?", y contestarlo que sí antes de que
-   * el embedding exista convierte un fallo transitorio en una página que no se indexa nunca más.
+   * It exists because the hash answers "does this need re-embedding?", and answering no before the
+   * embedding exists turns a transient failure into a page that never gets indexed again.
    */
   private async stampContentHashes(
     entries: Array<{ urlNormalized: string; sourceId?: string; contentHash: string }>,
@@ -419,9 +419,9 @@ export class WebRAGPlugin implements RAGPlugin {
     await col.bulkWrite(
       entries.map((entry) => ({
         updateOne: {
-          // Misma identidad que el índice único, con el campo SIEMPRE presente. Omitirlo cuando
-          // falta dejaría el filtro abierto y el hash podría caer en la fila de otro source que
-          // comparte la URL — que es justo lo que el índice nuevo hace posible.
+          // Same identity as the unique index, with the field ALWAYS present. Omitting it when it
+          // is missing would leave the filter open, and the hash could land on the row of another
+          // source that shares the URL — which is exactly what the new index makes possible.
           filter: {
             tenantId: this.config.tenantId,
             agentId,
@@ -441,15 +441,15 @@ export class WebRAGPlugin implements RAGPlugin {
   }
 
   /**
-   * Marca páginas como vistas por esta ingesta sin volver a extraerlas.
+   * Marks pages as seen by this ingestion without extracting them again.
    *
-   * El adquiriente decide que una página no cambió comparando su propio hash de HTML, y por eso no
-   * descarga el cuerpo. La fila igual tiene que quedar afirmada para el `ingestionId` actual: sin
-   * esto, el cierre de la ingesta lee esas páginas como ausentes y las borra — o sea que un
-   * re-crawl donde no cambió nada vaciaría el source.
+   * The acquirer decides a page did not change by comparing its own HTML hash, and therefore does
+   * not download the body. The row still has to be affirmed for the current `ingestionId`: without
+   * this, the ingestion's closing step reads those pages as absent and deletes them — meaning a
+   * re-crawl where nothing changed would empty the source.
    *
-   * No toca `contentHash`: la página no se volvió a extraer, así que no hay nada nuevo que afirmar
-   * sobre su contenido.
+   * It does not touch `contentHash`: the page was not extracted again, so there is nothing new to
+   * assert about its content.
    */
   async affirmPages(
     pages: readonly AffirmPageInput[],
@@ -502,11 +502,11 @@ export class WebRAGPlugin implements RAGPlugin {
   }
 
   /**
-   * Ingesta de páginas ya adquiridas. El HTML lo trae quien llama; este método no sale a la red.
+   * Ingests already-acquired pages. The caller brings the HTML; this method never hits the network.
    *
-   * Hace exactamente lo que `crawlUrls` hace DESPUÉS del fetch —extraer, decidir si cambió,
-   * embeddear y escribir el ledger— y devuelve un resultado por página. El orden
-   * hash/embeddings es el de 0.5.4: el hash se estampa recién cuando el embedding existe.
+   * It does exactly what `crawlUrls` does AFTER the fetch — extract, decide whether it changed,
+   * embed and write the ledger — and returns one result per page. The hash/embedding ordering is
+   * the one from 0.5.4: the hash is stamped only once the embedding exists.
    */
   async ingestFromHtml(
     pages: ProvidedPage[],
@@ -1161,22 +1161,22 @@ export class WebRAGPlugin implements RAGPlugin {
 
       // Remove any previous chunks for this document before re-ingesting.
       //
-      // Acotado por sourceId: `documentId` se deriva de la URL y NO es único entre sources del
-      // mismo agente, así que sin este filtro dos sources que compartan una URL —o cuyos ids
-      // colisionen al truncarse— se borran los chunks entre sí.
+      // Scoped by sourceId: `documentId` derives from the URL and is NOT unique across sources of
+      // the same agent, so without this filter two sources sharing a URL — or whose ids collide
+      // once truncated — delete each other's chunks.
       //
-      // Y corre SIEMPRE, no sólo cuando el documento quedó chunkeado: si una página pasó de
-      // chunkeada a no-chunkeada, el borrado condicionado dejaba vivos los chunks viejos.
+      // And it runs ALWAYS, not only when the document ended up chunked: if a page went from
+      // chunked to non-chunked, the conditional delete left the old chunks alive.
       //
-      // Y borra por las DOS formas de id: un documento que antes cabía en un solo chunk se guardó
-      // con `id: doc.id` y sin `documentId`; si ahora se chunkea, borrar sólo por `documentId`
-      // deja vivo el singleton viejo y la página queda duplicada.
+      // And it deletes by BOTH id shapes: a document that previously fit in a single chunk was
+      // stored with `id: doc.id` and no `documentId`; if it is chunked now, deleting only by
+      // `documentId` leaves the old singleton alive and the page ends up duplicated.
       const sourceId = doc.metadata?.sourceId;
       const scope = {
         tenantId: this.config.tenantId,
         agentId,
-        // SIEMPRE presente. Omitirlo cuando falta no acota menos: no acota nada, y el borrado se
-        // lleva puestos los chunks de otro source que comparta el id de documento.
+        // ALWAYS present. Omitting it when missing does not narrow less: it narrows nothing, and
+        // the delete takes out the chunks of another source that shares the document id.
         'metadata.sourceId': typeof sourceId === 'string' && sourceId ? sourceId : null,
       };
       try {
@@ -2625,7 +2625,7 @@ export class WebRAGPlugin implements RAGPlugin {
     let urlsFailed = 0;
     const errors: Array<{ id: string; error: string }> = [];
     const documents: RAGDocument[] = [];
-    /** docId → fila de ledger a estampar, sólo si su embedding termina bien. */
+    /** docId → ledger row to stamp, only if its embedding finishes successfully. */
     const pendingHashes = new Map<
       string,
       { urlNormalized: string; sourceId?: string; contentHash: string }
@@ -2747,9 +2747,9 @@ export class WebRAGPlugin implements RAGPlugin {
               const changeStatus = ledgerEntry?.contentHash ? 'changed' : 'added';
               if (changeStatus === 'changed') counters.changed++;
               else counters.added++;
-              // SIN contentHash a propósito: los embeddings todavía no existen. Se estampa después
-              // de que `ingest` confirme el documento (ver stampContentHashes). Si esto se rompe,
-              // el hash viejo sobrevive y la página se vuelve a intentar — que es el lado seguro.
+              // WITHOUT contentHash on purpose: the embeddings do not exist yet. It is stamped
+              // after `ingest` confirms the document (see stampContentHashes). If this breaks, the
+              // old hash survives and the page is retried — which is the safe side.
               await this.upsertLedgerRecord({
                 url,
                 urlNormalized,
@@ -2901,7 +2901,7 @@ export class WebRAGPlugin implements RAGPlugin {
         errors.push(...ingestResult.errors);
       }
 
-      // Recién ahora el embedding existe: se estampa el hash de los documentos que NO fallaron.
+      // Only now does the embedding exist: stamp the hash of the documents that did NOT fail.
       const failedIds = new Set((ingestResult.errors ?? []).map((e) => e.id));
       const toStamp = [...pendingHashes.entries()]
         .filter(([docId]) => !failedIds.has(docId))

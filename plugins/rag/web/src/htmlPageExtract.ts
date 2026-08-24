@@ -68,13 +68,13 @@ export function urlToDocumentId(url: string): string {
 }
 
 /**
- * Identidad de documento del camino de HTML provisto.
+ * Document identity for the provided-HTML path.
  *
- * `urlToDocumentId` trunca a 100 caracteres y no lleva el source, así que dos URLs largas del
- * mismo sitio —o la misma URL en dos sources del mismo agente— colisionan. Ésta no colisiona y
- * conserva el source al frente para que una fila siga siendo legible en la base.
+ * `urlToDocumentId` truncates to 100 characters and does not carry the source, so two long URLs
+ * from the same site — or the same URL under two sources of the same agent — collide. This one does
+ * not collide, and keeps the source up front so a row stays readable in the database.
  *
- * No reemplaza a `urlToDocumentId`: cambiar aquélla dejaría huérfano todo lo ya indexado.
+ * It does not replace `urlToDocumentId`: changing that one would orphan everything already indexed.
  */
 export function sourceScopedDocumentId(sourceId: string, url: string): string {
   const digest = createHash('sha256').update(url).digest('hex').slice(0, 40);

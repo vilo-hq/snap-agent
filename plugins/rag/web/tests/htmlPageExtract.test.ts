@@ -10,7 +10,7 @@ describe('sourceScopedDocumentId', () => {
     expect(a).toBe(b);
   });
 
-  it('distingue dos URLs largas que urlToDocumentId colapsaría', () => {
+  it('distinguishes two long URLs that urlToDocumentId would collapse', () => {
     const base = 'https://x.test/' + 'a'.repeat(120);
     const uno = sourceScopedDocumentId('src-1', base + '/uno');
     const dos = sourceScopedDocumentId('src-1', base + '/dos');

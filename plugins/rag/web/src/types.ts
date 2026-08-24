@@ -195,7 +195,7 @@ export interface CrawlLedgerDocument {
 }
 
 export interface AffirmPageInput {
-  /** `requestedUrl` tal como la reportó el adquiriente. Es la clave. */
+  /** `requestedUrl` exactly as the acquirer reported it. This is the key. */
   url: string;
   sourceId: string;
   ingestionId: string;
@@ -215,22 +215,22 @@ export interface AffirmPageResult {
 
 export interface AffirmPagesResult {
   affirmed: number;
-  /** `pages.length === input.length`; mismo orden, sin truncar. */
+  /** `pages.length === input.length`; same order, never truncated. */
   pages: AffirmPageResult[];
 }
 
-/** Estado con el que el adquiriente cerró la página. Enum cerrado del crawler. */
+/** The status the acquirer closed the page with. Closed enum owned by the crawler. */
 export type ProvidedPageStatus =
   | 'ok' | 'non_html' | 'timeout' | 'blocked'
   | 'robots_denied' | 'too_large' | 'ssrf_denied' | 'render_failed' | 'error';
 
 export interface ProvidedPage {
-  /** `requestedUrl`, tal como la reportó el adquiriente. Es la clave; nunca la URL final. */
+  /** `requestedUrl`, exactly as the acquirer reported it. This is the key; never the final URL. */
   url: string;
   status: ProvidedPageStatus;
-  /** Requerido sólo cuando `status === 'ok'`. */
+  /** Required only when `status === 'ok'`. */
   html?: string;
-  /** Huella del adquiriente; la persiste el server sólo después de validar el commit por página. */
+  /** The acquirer's fingerprint; the server persists it only after validating the per-page commit. */
   fetchHash?: string;
   sourceId: string;
   ingestionId: string;
@@ -258,7 +258,7 @@ export interface ProvidedPageResult {
 export interface IngestFromHtmlResult {
   indexed: number;
   failed: number;
-  /** Un resultado por página de entrada, en el mismo orden. Sin truncar. */
+  /** One result per input page, in the same order. Never truncated. */
   pages: ProvidedPageResult[];
 }
 

@@ -1778,7 +1778,7 @@ describe('WebRAGPlugin', () => {
 
       expect(openaiMock.create).toHaveBeenCalled();
       expect(result.metadata?.counters?.added).toBe(1);
-      // El hash se estampa después del ingest, cuando el embedding ya existe.
+      // The hash is stamped after the ingest, once the embedding already exists.
       const hashStamp = mongoLedger.mockBulkWrite.mock.calls.find(
         ([operations]) => operations.some((op: any) => op.updateOne?.update?.$set?.contentHash),
       );
@@ -1811,7 +1811,7 @@ describe('WebRAGPlugin', () => {
         { type: 'page', concurrency: 1, stripQueryParams: true, extractLinks: true, metadata: { ingestionId: 'ing-1' } },
         { agentId: 'a1' },
       );
-      // El hash se estampa después del ingest, cuando el embedding ya existe.
+      // The hash is stamped after the ingest, once the embedding already exists.
       const firstHashStamp = mongoLedger.mockBulkWrite.mock.calls.find(
         ([operations]) => operations.some((op: any) => op.updateOne?.update?.$set?.contentHash),
       );
@@ -2127,7 +2127,7 @@ describe('WebRAGPlugin', () => {
   });
 
   describe('ingest: borrado de chunks previos', () => {
-    it('acota el deleteMany por sourceId cuando el documento lo trae', async () => {
+    it('scopes the deleteMany by sourceId when the document carries one', async () => {
       await plugin.ingest(
         [
           {
@@ -2140,16 +2140,17 @@ describe('WebRAGPlugin', () => {
       );
 
       const call = mongoLedger.mockDeleteMany.mock.calls[0][0];
-      // El id va dentro del $or —hay que borrar por las dos formas—, así que se afirma aparte del
-      // scope. Afirmar `documentId` en el nivel superior falla contra la implementación correcta.
+      // The id lives inside the $or — it has to delete by both shapes — so it is asserted apart
+      // from the scope. Asserting `documentId` at the top level fails against the correct
+      // implementation.
       expect(call.$or).toEqual([{ documentId: 'doc-a' }, { id: 'doc-a' }]);
       expect(call.agentId).toBe('agent-1');
       expect(call['metadata.sourceId']).toBe('src-1');
     });
 
-    it('acota al ambito legacy cuando el documento no trae sourceId', async () => {
-      // El campo va igual, como null: sin él el borrado dejaría de filtrar por source y alcanzaría
-      // los chunks de cualquiera que comparta el id.
+    it('scopes to the legacy scope when the document carries no sourceId', async () => {
+      // The field goes anyway, as null: without it the delete would stop filtering by source and
+      // would reach the chunks of anyone sharing the id.
       mongoLedger.mockDeleteMany.mockClear();
       await plugin.ingest(
         [{ id: 'doc-z', content: 'x'.repeat(5000), metadata: { type: 'detail', url: 'https://a.test/p/9' } }],
@@ -2158,7 +2159,7 @@ describe('WebRAGPlugin', () => {
       expect(mongoLedger.mockDeleteMany.mock.calls[0][0]['metadata.sourceId']).toBeNull();
     });
 
-    it('no toca los chunks de otro source con el mismo documentId', async () => {
+    it('does not touch the chunks of another source with the same documentId', async () => {
       mongoLedger.mockDeleteMany.mockClear();
       await plugin.ingest(
         [{ id: 'compartido', content: 'x'.repeat(5000), metadata: { type: 'detail', url: 'https://a.test/p/1', sourceId: 'src-2' } }],
@@ -2167,7 +2168,7 @@ describe('WebRAGPlugin', () => {
       expect(mongoLedger.mockDeleteMany.mock.calls[0][0]['metadata.sourceId']).toBe('src-2');
     });
 
-    it('borra también cuando el documento NO queda chunkeado', async () => {
+    it('deletes even when the document does NOT end up chunked', async () => {
       mongoLedger.mockDeleteMany.mockClear();
       await plugin.ingest(
         [
@@ -2184,14 +2185,14 @@ describe('WebRAGPlugin', () => {
     });
   });
 
-  describe('ledger: índice de identidad', () => {
-    it('declara el índice único incluyendo sourceId', async () => {
+  describe('ledger: identity index', () => {
+    it('declares the unique index including sourceId', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         headers: { get: () => 'text/html' },
         text: async () => `<html><body>${'y'.repeat(5000)}</body></html>`,
       });
-      // El índice se declara al usar el ledger; ingest() no llega a getLedgerCollection().
+      // The index is declared when the ledger is used; ingest() never reaches getLedgerCollection().
       await plugin.ingestFromUrls(
         ['https://a.test/p/3'],
         { crawlLedger: { enabled: true } },
@@ -2205,7 +2206,7 @@ describe('WebRAGPlugin', () => {
       expect(uniqueCalls[0][0]).toEqual({ tenantId: 1, agentId: 1, sourceId: 1, urlNormalized: 1 });
     });
 
-    it('dos sources con la misma URL no comparten fila de ledger', async () => {
+    it('two sources with the same URL do not share a ledger row', async () => {
       mongoLedger.mockUpdateOne.mockClear();
       mockFetch.mockResolvedValue({
         ok: true,
@@ -2228,19 +2229,19 @@ describe('WebRAGPlugin', () => {
       const scopes = mongoLedger.mockUpdateOne.mock.calls.map(([filter]) => filter.sourceId);
       expect(scopes).toContain('src-1');
       expect(scopes).toContain('src-2');
-      // Y ninguna llamada quedó sin el campo.
+      // And no call was left without the field.
       expect(mongoLedger.mockUpdateOne.mock.calls.every(([filter]) => 'sourceId' in filter)).toBe(true);
     });
   });
 
-  describe('crawlUrls: orden entre hash y embeddings', () => {
-    it('no guarda el contentHash si el ingest falla', async () => {
+  describe('crawlUrls: ordering between hash and embeddings', () => {
+    it('does not store the contentHash if the ingest fails', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         headers: { get: () => 'text/html' },
         text: async () => `<html><body>${'z'.repeat(5000)}</body></html>`,
       });
-      // El crawl trae una página nueva, pero embeddear explota.
+      // The crawl brings in a new page, but embedding blows up.
       vi.spyOn(plugin as any, 'generateEmbeddingsBatch').mockRejectedValue(new Error('openai down'));
 
       await plugin.ingestFromUrls(['https://a.test/p/9'], { crawlLedger: { enabled: true } }, {
@@ -2260,7 +2261,7 @@ describe('WebRAGPlugin', () => {
   });
 
   describe('affirmPages', () => {
-    it('refresca ingestionId y lastCrawledAt sin tocar el contentHash', async () => {
+    it('refreshes ingestionId and lastCrawledAt without touching the contentHash', async () => {
       mongoLedger.mockUpdateOne.mockClear();
 
       const result = await plugin.affirmPages(
@@ -2283,7 +2284,7 @@ describe('WebRAGPlugin', () => {
       expect(update.$set.contentHash).toBeUndefined();
     });
 
-    it('no hace ninguna escritura con una lista vacía', async () => {
+    it('performs no writes for an empty list', async () => {
       mongoLedger.mockUpdateOne.mockClear();
       const result = await plugin.affirmPages([], {}, { agentId: 'agent-1' });
       expect(result.affirmed).toBe(0);
@@ -2291,7 +2292,7 @@ describe('WebRAGPlugin', () => {
       expect(mongoLedger.mockUpdateOne).not.toHaveBeenCalled();
     });
 
-    it('conserva la posición de una URL inválida sin escribir una fila cruda', async () => {
+    it('keeps the position of an invalid URL without writing a raw row', async () => {
       mongoLedger.mockUpdateOne.mockClear();
 
       const result = await plugin.affirmPages(
@@ -2323,7 +2324,7 @@ describe('WebRAGPlugin', () => {
       ...over,
     });
 
-    it('devuelve un resultado por página, en orden', async () => {
+    it('returns one result per page, in order', async () => {
       const result = await plugin.ingestFromHtml(
         [page(), page({ url: 'https://a.test/p/2' })],
         {},
@@ -2334,7 +2335,7 @@ describe('WebRAGPlugin', () => {
       expect(result.pages[1].url).toBe('https://a.test/p/2');
     });
 
-    it('conserva todas las posiciones cuando una URL no se puede normalizar', async () => {
+    it('keeps every position when a URL cannot be normalized', async () => {
       mongoLedger.mockUpdateOne.mockClear();
       const result = await plugin.ingestFromHtml(
         [page(), page({ url: 'no es una url' }), page({ url: 'https://a.test/p/3' })],
@@ -2358,7 +2359,7 @@ describe('WebRAGPlugin', () => {
       )).toBe(false);
     });
 
-    it('marca added una página nueva y expone su elegibilidad sin persistir fetchHash', async () => {
+    it('marks a new page as added and exposes its eligibility without persisting fetchHash', async () => {
       const result = await plugin.ingestFromHtml(
         [page({ fetchHash: 'fetch-hash-del-adquiriente' })],
         {},
@@ -2374,7 +2375,7 @@ describe('WebRAGPlugin', () => {
       expect(persistedFetchHash).toBe(false);
     });
 
-    it('no embeddea de nuevo si el contentHash no se movió', async () => {
+    it('does not re-embed when the contentHash did not move', async () => {
       const first = await plugin.ingestFromHtml([page()], {}, { agentId: 'agent-1' });
       const hash = first.pages[0].contentHash!;
       mongoLedger.mockFindOne.mockResolvedValue({
@@ -2388,7 +2389,7 @@ describe('WebRAGPlugin', () => {
       expect(second.indexed).toBe(0);
     });
 
-    it('no intenta extraer una página que el adquiriente no pudo traer', async () => {
+    it('does not try to extract a page the acquirer could not fetch', async () => {
       const result = await plugin.ingestFromHtml(
         [page({ status: 'robots_denied', html: undefined })],
         {},
