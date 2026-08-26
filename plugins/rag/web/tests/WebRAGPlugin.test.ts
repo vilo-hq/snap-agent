@@ -106,6 +106,48 @@ describe('WebRAGPlugin', () => {
     await plugin.disconnect();
   });
 
+  /**
+   * `topResults` es un allowlist fijo, no un passthrough del metadata: el host lee de aca y todo lo
+   * que no este listado desaparece en silencio. Los campos descubiertos por la herramienta de
+   * taxonomia (`metadata.fields`) viajan crudos hasta la card y hasta el contexto compacto del
+   * modelo, asi que tienen que estar en la lista o el lector del host nunca ve el dato.
+   */
+  describe('retrieveContext topResults', () => {
+    const docWith = (metadata: Record<string, unknown>) => ({
+      id: 'doc-1',
+      content: 'contenido',
+      metadata: { type: 'detail', title: 'Ficha', url: 'https://x.test/p/1', ...metadata },
+      score: 0.9,
+    });
+
+    const topResultFor = async (metadata: Record<string, unknown>) => {
+      mongoLedger.mockClient
+        .db()
+        .collection()
+        .aggregate.mockReturnValue({ toArray: vi.fn().mockResolvedValue([docWith(metadata)]) });
+      const context = await plugin.retrieveContext('consulta');
+      return (context.metadata as { topResults: Array<Record<string, unknown>> }).topResults[0]!;
+    };
+
+    it('reenvia metadata.fields al host', async () => {
+      const fields = { Client: ['Advocate Health Care'], Size: ['226,454 sf'] };
+      const result = await topResultFor({ fields });
+      expect(result.fields).toEqual(fields);
+    });
+
+    it('no inventa la clave cuando el documento no tiene campos', async () => {
+      // El pool puede traer cientos de documentos por turno: una clave vacia por cada uno es peso
+      // muerto en el payload. Mismo criterio que `price`, `colors` y el resto de los condicionales.
+      const result = await topResultFor({});
+      expect('fields' in result).toBe(false);
+    });
+
+    it('preserva los valores sin slugificar', async () => {
+      const result = await topResultFor({ fields: { Size: ['226,454 sf'] } });
+      expect((result.fields as Record<string, string[]>).Size).toEqual(['226,454 sf']);
+    });
+  });
+
   describe('constructor', () => {
     it('should set default values', () => {
       expect(plugin.name).toBe('web-rag');
