@@ -45,8 +45,9 @@ describe('extractPageFromHtml', () => {
 
     expect(result.indexable).toBe(true);
     expect(result.metadata).toMatchObject({
-      type: 'detail',
-      cardEligible: true,
+      // El llamador dijo `product` y le queda `product`. Antes se reescribía a `detail`: el plugin
+      // pisaba la palabra de quien sí conoce la vertical.
+      type: 'product',
       title: 'Shop | Widget',
       displayTitle: 'Widget',
       url: 'https://shop.example.com/product/widget',
@@ -55,6 +56,15 @@ describe('extractPageFromHtml', () => {
       price: 10.5,
       currency: 'USD',
       availability: 'InStock',
+    });
+    // La elegibilidad ya no se decide acá.
+    expect(result.metadata.cardEligible).toBeUndefined();
+    expect(result.metadata.cardPriority).toBeUndefined();
+    // Y lo que la página declaró viaja como evidencia, sin aplanar.
+    expect(result.metadata.observations).toMatchObject({
+      schemaTypes: expect.arrayContaining(['product', 'offer']),
+      pathSegments: ['product', 'widget'],
+      signals: expect.objectContaining({ hasPrice: true, hasH1: true }),
     });
     expect(result.content.length).toBeGreaterThan(50);
     expect(result.contentPreview.length).toBeGreaterThan(0);

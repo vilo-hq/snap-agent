@@ -1,136 +1,115 @@
 import * as cheerio from 'cheerio';
 
-/** Abstract page roles — vertical-agnostic. */
-export type PageCardType =
-  | 'detail'
-  | 'listing'
-  | 'amenity'
-  | 'promotion'
-  | 'contact'
-  | 'content'
-  | 'blog'
-  | 'system'
-  | 'page';
+/**
+ * What a page SAYS about itself, plus its presentation. No verdict on what it IS.
+ *
+ * WHY: this module used to sort every page into nine roles (`detail | listing | amenity | promotion |
+ * contact | content | blog | system | page`) and derive `cardEligible` and `cardPriority` from them.
+ * Three problems, measured against a real corpus:
+ *
+ * 1. The vocabulary is a storefront's. `promotion` classified 2 chunks across an entire tenant;
+ *    `content` and `blog`, zero. Meanwhile `hardExcludePage` sent EVERY news page to `system`,
+ *    assuming `/news/` is shop chrome — on a content site, news IS the content.
+ * 2. The verdict was lossy. `inferTypeFromUrl` tried twenty patterns (`/projects/`, `/people/`,
+ *    `/propiedad/`…) with `.some()` and returned `detail`: it knew WHICH one matched and threw that
+ *    away. The host ended up rediscovering it with the same regexes, duplicated on its side.
+ * 3. And it was un-overridable. `type` was simultaneously the role, the eligibility key and a
+ *    filterable field, so the host could not correct it without silently turning cards off. It
+ *    repaired afterwards instead, with backfill scripts.
+ *
+ * Now we emit the EVIDENCE — the JSON-LD `@type` verbatim, `og:type`, the path segments, which
+ * signals are present — and the caller decides, because the caller knows its vertical. The most
+ * reliable fact on a page is what the site itself declares; flattening it to `detail` destroyed it.
+ *
+ * The opinions worth keeping ship as exported constants (`DEFAULT_JUNK_URL_PATTERNS`,
+ * `STOREFRONT_URL_PATTERNS`): the caller uses them, extends them, or ignores them. We share the
+ * knowledge without imposing it.
+ */
 
-export interface PageCardMetadataInput {
+/** Presence signals. Facts, not judgements. */
+export interface PageSignals {
+  hasPrice: boolean;
+  hasPublishDate: boolean;
+  hasAuthor: boolean;
+  hasH1: boolean;
+}
+
+export interface PageObservations {
+  /** Each JSON-LD node's `@type`, lowercased and stripped of the vocabulary URL. UNMAPPED. */
+  schemaTypes: string[];
+  /** `og:type`, verbatim. */
+  ogType?: string;
+  /** Path segments, lowercased, empties dropped: `/our-work/projects/x` → [our-work, projects, x] */
+  pathSegments: string[];
+  signals: PageSignals;
+}
+
+export interface PageDisplayMetadataInput {
   url: string;
   title?: string;
-  /** Primary heading (h1) — preferred for displayTitle over the document title tag. */
+  /** `h1` — preferred over `<title>` for the display title. */
   headingTitle?: string;
   description?: string;
   imageUrl?: string;
   html?: string;
-  /** Type already resolved from typeFromUrl / defaultType. */
-  type?: string;
-  hasProductPrice?: boolean;
+  /** Price signal already detected by the caller (product extractors). */
+  hasPriceSignal?: boolean;
 }
 
-export interface PageCardMetadataResult {
-  type: PageCardType | string;
-  cardEligible: boolean;
-  cardPriority: number;
+export interface PageDisplayMetadataResult {
   displayTitle?: string;
   displayDescription?: string;
   displayImageUrl?: string;
+  observations: PageObservations;
 }
 
-const HARD_EXCLUDE_URL_RE =
-  /(?:^|\/)(?:login|signin|sign-in|signup|sign-up|register|account|cart|checkout|admin|wp-admin|privacy|terms|legal|cookies|gdpr|thank|gracias|confirm|success|receipt|404|tag|tags|category|categories|author|archive|newsletter|careers|jobs)(?:\/|$|-|\.)/i;
-
-const HARD_EXCLUDE_TITLE_RE =
-  /\b(?:login|sign\s*in|sign\s*up|privacy\s*policy|terms\s*(?:of\s*)?service|thank\s*you|gracias\s*por|admin|404|not\s*found)\b/i;
-
-const BLOG_URL_RE = /(?:^|\/)(?:blog|news|press|article|posts?)(?:\/|$)/i;
-
-const PROMOTION_URL_RE =
-  /(?:^|\/)(?:offer|offers|sale|sales|promo|promotion|deal|deals|coupon|special-offer|buster)(?:\/|$|-|\.)/i;
-/** Slug contains promo tokens without a path segment (e.g. inflation-buster-sale). */
-const PROMOTION_SLUG_RE = /(?:^|\/)[^/]*(?:-sale|-offer|-promo|-deal|-buster)(?:\/|$)/i;
-
-/** Path has a segment after a known collection slug → entity detail (e.g. /projects/acme-tower). */
-const ENTITY_DETAIL_PATH_RES: RegExp[] = [
-  /\/projects\/[^/]+/i,
-  /\/project\/[^/]+/i,
-  /\/perspectives\/[^/]+/i,
-  /\/perspective\/[^/]+/i,
-  /\/portfolio\/[^/]+/i,
-  /\/case-stud(?:y|ies)\/[^/]+/i,
-  /\/insights?\/[^/]+/i,
-  /\/people\/[^/]+/i,
-  /\/person\/[^/]+/i,
-  /\/team-members?\/[^/]+/i,
-  /\/members?\/[^/]+/i,
-  /\/staff\/[^/]+/i,
-  /\/experts?\/[^/]+/i,
-  /\/authors?\/[^/]+/i,
-  /\/leadership\/[^/]+/i,
-  /\/biograph(?:y|ies)\/[^/]+/i,
-  /\/propiedad\/[^/]+/i,
-  /\/propiedades\/[^/]+/i,
-  /\/listings\/[^/]+/i,
-  /\/propiedades\/clasificado\/[^/]+/i,
+/**
+ * Pages that are not content in any vertical: auth, cart, admin, errors.
+ *
+ * EXPORTED, not applied: the caller decides whether to skip them. Filtering them saves embeddings
+ * and keeps junk out of retrieval, so most callers will want them — but it stays their call.
+ *
+ * Note what is NOT here: `news`, `press`, `article`, `blog`, `tag`, `category`, `author`, `archive`
+ * and `careers` were all in the previous list, and it was always applied. That assumed a storefront.
+ * For an architecture firm or a publisher those pages are the product, and undoing the exclusion
+ * cost one backfill script per class.
+ */
+export const DEFAULT_JUNK_URL_PATTERNS: readonly RegExp[] = [
+  /(?:^|\/)(?:login|signin|sign-in|signup|sign-up|register|account)(?:\/|$|-|\.)/i,
+  /(?:^|\/)(?:cart|checkout|thank|gracias|confirm|success|receipt)(?:\/|$|-|\.)/i,
+  /(?:^|\/)(?:admin|wp-admin)(?:\/|$|-|\.)/i,
+  /(?:^|\/)(?:privacy|terms|legal|cookies|gdpr)(?:\/|$|-|\.)/i,
+  /(?:^|\/)404(?:\/|$|-|\.)/i,
 ];
 
-const DETAIL_URL_RE =
-  /(?:^|\/)(?:product|products|item|items|p|room|rooms|suite|suites|habitacion|plan|plans|space|spaces|tour|tours|menu|project|perspective|person|team-member|team-members|staff|expert|case-study|author|biography|propiedad|propiedades|inmueble|inmuebles|listings)(?:\/|$)/i;
+/** Titles that give away a utility page when the URL does not. Exported, not applied. */
+export const DEFAULT_JUNK_TITLE_PATTERNS: readonly RegExp[] = [
+  /\b(?:login|sign\s*in|sign\s*up|privacy\s*policy|terms\s*(?:of\s*)?service|thank\s*you|gracias\s*por|admin|404|not\s*found)\b/i,
+];
 
-/** Argenprop-style slug: departamento-en-venta-...--12345678 */
-const ARGENPROP_DETAIL_RE =
-  /-(?:en-venta|en-alquiler)-[^/?#]+(?:--|\-)\d{5,}/i;
+/** Retail patterns: they only make sense on a storefront, so THAT caller opts in. */
+export const STOREFRONT_URL_PATTERNS = {
+  promotion: [
+    /(?:^|\/)(?:offer|offers|sale|sales|promo|promotion|deal|deals|coupon|special-offer|buster)(?:\/|$|-|\.)/i,
+    /(?:^|\/)[^/]*(?:-sale|-offer|-promo|-deal|-buster)(?:\/|$)/i,
+  ] as readonly RegExp[],
+  cartAndCheckout: [/(?:^|\/)(?:cart|checkout)(?:\/|$|-|\.)/i] as readonly RegExp[],
+} as const;
 
-const LISTING_URL_RE =
-  /(?:^|\/)(?:catalog|catalogue|collection|collections|category|categories|shop|store|habitaciones|rooms|products|projects|perspectives|portfolio|people|team|members|insights|case-studies|thought-leadership)(?:\/|$)/i;
-
-const AMENITY_URL_RE = /(?:^|\/)(?:amenity|amenities|activity|activities|experience|experiences|service-page)(?:\/|$)/i;
-
-const CONTACT_URL_RE = /(?:^|\/)(?:contact|contacto|about|nosotros|faq|help|support)(?:\/|$)/i;
+/** Does any pattern match? So the caller does not reimplement the loop. */
+export function matchesAny(value: string, patterns: readonly RegExp[]): boolean {
+  return patterns.some((re) => re.test(value));
+}
 
 const EN_DASH_SUFFIX_RE = /\s+[–—]\s+.+$/;
 const PIPE_SUFFIX_RE = /\s+\|\s+.+$/;
 
-const CARD_PRIORITY: Record<string, number> = {
-  detail: 10,
-  listing: 6,
-  amenity: 5,
-  promotion: 2,
-  contact: 1,
-  content: 1,
-  blog: 0,
-  system: 0,
-  page: 3,
-};
-
-const CARD_ELIGIBLE_DEFAULT: Record<string, boolean> = {
-  detail: true,
-  listing: true,
-  amenity: true,
-  promotion: false,
-  contact: false,
-  content: false,
-  blog: false,
-  system: false,
-  page: false,
-};
-
-const SCHEMA_TYPE_MAP: Record<string, PageCardType> = {
-  product: 'detail',
-  service: 'amenity',
-  hotelroom: 'detail',
-  room: 'detail',
-  apartment: 'detail',
-  lodgingroom: 'detail',
-  course: 'detail',
-  event: 'detail',
-  offer: 'promotion',
-  person: 'detail',
-  employee: 'detail',
-  profilepage: 'detail',
-  article: 'detail',
-  newsarticle: 'detail',
-  blogposting: 'detail',
-  creativework: 'detail',
-};
-
+/**
+ * "Riverside Medical Center | Example Studio" → "Riverside Medical Center".
+ *
+ * The minimum indices stop a short leading segment from being eaten when the separator comes early,
+ * and the two passes cover "Title – Section | Brand". Unchanged from the previous version.
+ */
 export function normalizeDisplayTitle(title?: string): string | undefined {
   if (!title?.trim()) return title;
   let t = title.trim();
@@ -150,33 +129,6 @@ export function normalizeDisplayTitle(title?: string): string | undefined {
   return t || title.trim();
 }
 
-export function hardExcludePage(url: string, title?: string): boolean {
-  const path = url.toLowerCase();
-  if (HARD_EXCLUDE_URL_RE.test(path)) return true;
-  if (BLOG_URL_RE.test(path)) return true;
-  if (title && HARD_EXCLUDE_TITLE_RE.test(title.toLowerCase())) return true;
-  try {
-    const u = new URL(url);
-    if (u.pathname === '/' || u.pathname === '') return true;
-  } catch {
-    /* ignore */
-  }
-  return false;
-}
-
-export function inferTypeFromUrl(url: string): PageCardType | undefined {
-  const path = url.toLowerCase();
-  if (PROMOTION_URL_RE.test(path) || PROMOTION_SLUG_RE.test(path)) return 'promotion';
-  if (CONTACT_URL_RE.test(path)) return 'contact';
-  if (ENTITY_DETAIL_PATH_RES.some((re) => re.test(path))) return 'detail';
-  if (AMENITY_URL_RE.test(path)) return 'amenity';
-  if (DETAIL_URL_RE.test(path)) return 'detail';
-  if (ARGENPROP_DETAIL_RE.test(path)) return 'detail';
-  if (LISTING_URL_RE.test(path)) return 'listing';
-  if (BLOG_URL_RE.test(path)) return 'blog';
-  return undefined;
-}
-
 function collectJsonLdNodes(data: unknown): Record<string, unknown>[] {
   const nodes: Record<string, unknown>[] = [];
   const visit = (value: unknown) => {
@@ -194,99 +146,78 @@ function collectJsonLdNodes(data: unknown): Record<string, unknown>[] {
   return nodes;
 }
 
-function schemaTypeName(node: Record<string, unknown>): string {
+function schemaTypeNames(node: Record<string, unknown>): string[] {
   const type = node['@type'];
   const types = Array.isArray(type) ? type : type != null ? [type] : [];
-  const raw = types[0];
-  if (raw == null) return '';
-  const s = String(raw).toLowerCase();
-  const slash = s.lastIndexOf('/');
-  return slash >= 0 ? s.slice(slash + 1) : s;
+  return types
+    .map((raw) => {
+      const s = String(raw).toLowerCase();
+      const slash = s.lastIndexOf('/');
+      return slash >= 0 ? s.slice(slash + 1) : s;
+    })
+    .filter(Boolean);
 }
 
-export function inferTypeFromSchema(html: string): PageCardType | undefined {
+/**
+ * The `@type` values the page declares, verbatim and unmapped.
+ *
+ * This used to run through a `SCHEMA_TYPE_MAP` that collapsed `Person`, `Article`, `Event` and
+ * `Course` into `detail`. The site said `Person` — the most reliable signal on the page — and
+ * flattening it forced the host to rediscover the class from the URL.
+ */
+export function extractSchemaTypes(html: string): string[] {
   const $ = cheerio.load(html);
+  const out = new Set<string>();
   for (const el of $('script[type="application/ld+json"]').toArray()) {
     const raw = $(el).html()?.trim();
     if (!raw) continue;
     try {
-      const parsed = JSON.parse(raw) as unknown;
-      for (const node of collectJsonLdNodes(parsed)) {
-        const name = schemaTypeName(node);
-        if (SCHEMA_TYPE_MAP[name]) return SCHEMA_TYPE_MAP[name];
-        if (name === 'product' || node.offers != null) return 'detail';
+      for (const node of collectJsonLdNodes(JSON.parse(raw) as unknown)) {
+        for (const name of schemaTypeNames(node)) out.add(name);
+        // `offers` without a readable `@type` is still a commercial-offer signal.
+        if (node.offers != null) out.add('offer');
       }
     } catch {
-      /* ignore */
+      /* one broken JSON-LD block does not invalidate the others */
     }
   }
-  const ogType = $('meta[property="og:type"]').attr('content')?.toLowerCase();
-  if (ogType === 'product') return 'detail';
-  return undefined;
+  return [...out];
 }
 
-function normalizePageType(raw?: string): PageCardType | string {
-  if (!raw) return 'page';
-  const lower = raw.toLowerCase();
-  const known: PageCardType[] = [
-    'detail', 'listing', 'amenity', 'promotion', 'contact', 'content', 'blog', 'system', 'page',
-  ];
-  if (known.includes(lower as PageCardType)) return lower as PageCardType;
-  if (lower === 'room' || lower === 'product') return 'detail';
-  if (lower === 'offer' || lower === 'sale') return 'promotion';
-  return raw;
+export function extractPathSegments(url: string): string[] {
+  try {
+    return new URL(url).pathname.toLowerCase().split('/').filter(Boolean);
+  } catch {
+    return [];
+  }
 }
 
-function resolveDisplayTitle(input: PageCardMetadataInput): string | undefined {
+/** Presentation + evidence. No `type`, no `cardEligible`, no `cardPriority`. */
+export function resolvePageDisplayMetadata(
+  input: PageDisplayMetadataInput,
+): PageDisplayMetadataResult {
+  const html = input.html ?? '';
+  const $ = html ? cheerio.load(html) : null;
   const heading = input.headingTitle?.trim();
-  if (heading) return normalizeDisplayTitle(heading);
-  return normalizeDisplayTitle(input.title);
-}
 
-export function resolvePageCardMetadata(input: PageCardMetadataInput): PageCardMetadataResult {
-  const title = input.title?.trim();
-  const url = input.url;
-  const displayTitle = resolveDisplayTitle(input);
-
-  if (hardExcludePage(url, title)) {
-    return {
-      type: 'system',
-      cardEligible: false,
-      cardPriority: 0,
-      displayTitle,
-      displayDescription: input.description,
-      displayImageUrl: input.imageUrl,
-    };
-  }
-
-  let type: PageCardType | string = normalizePageType(input.type);
-
-  if (type === 'page' && input.html) {
-    const fromSchema = inferTypeFromSchema(input.html);
-    if (fromSchema) type = fromSchema;
-  }
-  if (type === 'page') {
-    const fromUrl = inferTypeFromUrl(url);
-    if (fromUrl) type = fromUrl;
-  }
-  if (input.hasProductPrice && type === 'page') {
-    type = 'detail';
-  }
-
-  const typeKey = String(type).toLowerCase();
-  let cardEligible = CARD_ELIGIBLE_DEFAULT[typeKey] ?? false;
-  let cardPriority = CARD_PRIORITY[typeKey] ?? 3;
-
-  if (cardEligible && PROMOTION_URL_RE.test(url.toLowerCase())) {
-    cardEligible = false;
-  }
+  const observations: PageObservations = {
+    schemaTypes: html ? extractSchemaTypes(html) : [],
+    ogType: $ ? $('meta[property="og:type"]').attr('content')?.toLowerCase() || undefined : undefined,
+    pathSegments: extractPathSegments(input.url),
+    signals: {
+      hasPrice: input.hasPriceSignal === true,
+      hasPublishDate: $
+        ? $('meta[property="article:published_time"], time[datetime]').length > 0
+        : false,
+      hasAuthor: $ ? $('meta[name="author"], meta[property="article:author"]').length > 0 : false,
+      hasH1: heading != null && heading.length > 0,
+    },
+  };
 
   return {
-    type,
-    cardEligible,
-    cardPriority,
-    displayTitle,
+    displayTitle: normalizeDisplayTitle(heading || input.title),
     displayDescription: input.description?.trim() || undefined,
     displayImageUrl: input.imageUrl,
+    observations,
   };
 }
