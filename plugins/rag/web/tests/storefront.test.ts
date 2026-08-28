@@ -13,16 +13,16 @@ describe('storefront framework — auto-detection + platform tag', () => {
 
   it('extracts no colors from a non-product (content) page — no variant structure', () => {
     // Architecture firm project page: color words in prose / img alt / a theme JSON token, but no
-    // product/variant structure. Must not be tagged as a product (the SmithGroup "Camelback" bug).
+    // product/variant structure. Must not be tagged as a product (the "Camelback" bug).
     const html = `<html><head>
       <script type="application/ld+json">{"@type":"WebPage","name":"Phoenix Office"}</script>
       <script>window.theme = {"color":"black"};</script>
       </head><body>
-      <h1>SmithGroup Phoenix Office</h1>
+      <h1>Example Studio Phoenix Office</h1>
       <p>A design drawing on the Sonoran Desert near Camelback Mountain, with black granite.</p>
       <img alt="Black granite facade with Camelback Mountain view" src="x.jpg"/>
     </body></html>`;
-    const v = extractVariants(html, 'https://smithgroup.com/projects/phoenix');
+    const v = extractVariants(html, 'https://example.com/projects/phoenix');
     expect(v.colors).toEqual([]);
     expect(v.platform).toBeUndefined();
   });

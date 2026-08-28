@@ -26,12 +26,21 @@ export type {
   RunPageExtractorsResult,
 } from './pageExtractors';
 export {
-  resolvePageCardMetadata,
-  hardExcludePage,
-  inferTypeFromUrl,
+  resolvePageDisplayMetadata,
   normalizeDisplayTitle,
+  extractSchemaTypes,
+  extractPathSegments,
+  matchesAny,
+  DEFAULT_JUNK_URL_PATTERNS,
+  DEFAULT_JUNK_TITLE_PATTERNS,
+  STOREFRONT_URL_PATTERNS,
 } from './pageCardMetadata';
-export type { PageCardMetadataInput, PageCardMetadataResult, PageCardType } from './pageCardMetadata';
+export type {
+  PageDisplayMetadataInput,
+  PageDisplayMetadataResult,
+  PageObservations,
+  PageSignals,
+} from './pageCardMetadata';
 export type {
   WebRAGConfig,
   WebDocument,

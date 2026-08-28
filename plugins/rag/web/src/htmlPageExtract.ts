@@ -2,7 +2,7 @@ import * as cheerio from 'cheerio';
 import { createHash } from 'node:crypto';
 import { extractProductMetadata } from './productMetadata';
 import { runPageExtractors } from './pageExtractors';
-import { resolvePageCardMetadata } from './pageCardMetadata';
+import { resolvePageDisplayMetadata } from './pageCardMetadata';
 
 const DEFAULT_CONTENT_SELECTOR =
   'article, main, [role="main"], #content, #primary, #main, .content, .post-content, ' +
@@ -157,7 +157,10 @@ export function extractPageFromHtml(
     $('meta[name="description"]').attr('content') ||
     undefined;
 
-  let type = options.defaultType || 'page';
+  // `type` is ONLY what the caller configured. The plugin no longer infers a page role: it emits
+  // `observations` and whoever knows the vertical decides. With neither `defaultType` nor
+  // `typeFromUrl` the field is not written — one constant value on every page carries no information.
+  let type: string | undefined = options.defaultType;
   if (options.typeFromUrl) {
     for (const [pattern, typeName] of Object.entries(options.typeFromUrl)) {
       if (url.includes(pattern)) {
@@ -176,28 +179,28 @@ export function extractPageFromHtml(
   const price = productMeta.price ?? extractedPrice;
   const currency = productMeta.currency ?? extractedCurrency;
 
-  const cardMeta = resolvePageCardMetadata({
+  const display = resolvePageDisplayMetadata({
     url,
     title,
     headingTitle: h1Title || undefined,
     description,
     imageUrl,
     html,
-    type,
-    hasProductPrice: productMeta.price != null || extracted.hasPriceSignal,
+    hasPriceSignal: productMeta.price != null || extracted.hasPriceSignal,
   });
 
   const metadata: Record<string, unknown> = {
-    type: cardMeta.type,
-    cardEligible: cardMeta.cardEligible,
-    cardPriority: cardMeta.cardPriority,
+    // `cardEligible` / `cardPriority` no longer come from here: what deserves to be a card depends
+    // on the caller's entity model, not on the shape of the page. What does travel is the evidence.
+    ...(type ? { type } : {}),
+    observations: display.observations,
     ...(title ? { title } : {}),
-    ...(cardMeta.displayTitle ? { displayTitle: cardMeta.displayTitle } : {}),
+    ...(display.displayTitle ? { displayTitle: display.displayTitle } : {}),
     url,
     ...(imageUrl ? { imageUrl } : {}),
-    ...(cardMeta.displayImageUrl ? { displayImageUrl: cardMeta.displayImageUrl } : {}),
+    ...(display.displayImageUrl ? { displayImageUrl: display.displayImageUrl } : {}),
     ...(description ? { description } : {}),
-    ...(cardMeta.displayDescription ? { displayDescription: cardMeta.displayDescription } : {}),
+    ...(display.displayDescription ? { displayDescription: display.displayDescription } : {}),
     ...(productMeta.availability ? { availability: productMeta.availability } : {}),
     ...extracted.metadata,
     // Computed price/currency last so basics (productMeta) take precedence over an extractor's.
