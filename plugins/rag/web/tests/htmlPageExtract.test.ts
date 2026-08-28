@@ -119,12 +119,12 @@ describe('extractPageFromHtml', () => {
   it('does NOT tag pages with real-estate fields (vertical packs are host-registered)', () => {
     // Property-ish prose ("casa", "oficina") but no listing structure → must stay clean.
     const body = `<main>
-      <h1>SmithGroup Phoenix Office</h1>
+      <h1>Example Studio Phoenix Office</h1>
       <p>${'Our office design connects people and purpose, drawing on the Sonoran Desert. '.repeat(3)}</p>
       <p>A welcoming casa-like atmosphere across the oficina floors near Camelback Mountain.</p>
     </main>`;
-    const html = `<!DOCTYPE html><html><head><title>SmithGroup Phoenix Office</title></head><body>${body}</body></html>`;
-    const result = extractPageFromHtml('https://smithgroup.com/projects/phoenix-office', html);
+    const html = `<!DOCTYPE html><html><head><title>Example Studio Phoenix Office</title></head><body>${body}</body></html>`;
+    const result = extractPageFromHtml('https://example.com/projects/phoenix-office', html);
 
     expect(result.metadata.operationType).toBeUndefined();
     expect(result.metadata.propertyType).toBeUndefined();
