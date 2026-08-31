@@ -107,16 +107,16 @@ describe('WebRAGPlugin', () => {
   });
 
   /**
-   * `topResults` es un allowlist fijo, no un passthrough del metadata: el host lee de aca y todo lo
-   * que no este listado desaparece en silencio. Los campos descubiertos por la herramienta de
-   * taxonomia (`metadata.fields`) viajan crudos hasta la card y hasta el contexto compacto del
-   * modelo, asi que tienen que estar en la lista o el lector del host nunca ve el dato.
+   * `topResults` is a fixed allowlist, not a metadata passthrough: the host reads from here and
+   * anything not listed disappears silently. The fields discovered by the taxonomy tool
+   * (`metadata.fields`) travel raw all the way to the card and to the model's compact context, so
+   * they have to be on the list or the host-side reader never sees the data.
    */
   describe('retrieveContext topResults', () => {
     const docWith = (metadata: Record<string, unknown>) => ({
       id: 'doc-1',
-      content: 'contenido',
-      metadata: { type: 'detail', title: 'Ficha', url: 'https://x.test/p/1', ...metadata },
+      content: 'content',
+      metadata: { type: 'detail', title: 'Listing', url: 'https://x.test/p/1', ...metadata },
       score: 0.9,
     });
 
@@ -125,24 +125,24 @@ describe('WebRAGPlugin', () => {
         .db()
         .collection()
         .aggregate.mockReturnValue({ toArray: vi.fn().mockResolvedValue([docWith(metadata)]) });
-      const context = await plugin.retrieveContext('consulta');
+      const context = await plugin.retrieveContext('query');
       return (context.metadata as { topResults: Array<Record<string, unknown>> }).topResults[0]!;
     };
 
-    it('reenvia metadata.fields al host', async () => {
+    it('forwards metadata.fields to the host', async () => {
       const fields = { Client: ['Advocate Health Care'], Size: ['226,454 sf'] };
       const result = await topResultFor({ fields });
       expect(result.fields).toEqual(fields);
     });
 
-    it('no inventa la clave cuando el documento no tiene campos', async () => {
-      // El pool puede traer cientos de documentos por turno: una clave vacia por cada uno es peso
-      // muerto en el payload. Mismo criterio que `price`, `colors` y el resto de los condicionales.
+    it('does not invent the key when the document has no fields', async () => {
+      // The pool can bring hundreds of documents per turn: an empty key on each one is dead weight
+      // in the payload. Same criterion as `price`, `colors` and the rest of the conditionals.
       const result = await topResultFor({});
       expect('fields' in result).toBe(false);
     });
 
-    it('preserva los valores sin slugificar', async () => {
+    it('preserves the values unslugified', async () => {
       const result = await topResultFor({ fields: { Size: ['226,454 sf'] } });
       expect((result.fields as Record<string, string[]>).Size).toEqual(['226,454 sf']);
     });
