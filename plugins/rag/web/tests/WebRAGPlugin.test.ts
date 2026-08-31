@@ -106,6 +106,48 @@ describe('WebRAGPlugin', () => {
     await plugin.disconnect();
   });
 
+  /**
+   * `topResults` is a fixed allowlist, not a metadata passthrough: the host reads from here and
+   * anything not listed disappears silently. The fields discovered by the taxonomy tool
+   * (`metadata.fields`) travel raw all the way to the card and to the model's compact context, so
+   * they have to be on the list or the host-side reader never sees the data.
+   */
+  describe('retrieveContext topResults', () => {
+    const docWith = (metadata: Record<string, unknown>) => ({
+      id: 'doc-1',
+      content: 'content',
+      metadata: { type: 'detail', title: 'Listing', url: 'https://x.test/p/1', ...metadata },
+      score: 0.9,
+    });
+
+    const topResultFor = async (metadata: Record<string, unknown>) => {
+      mongoLedger.mockClient
+        .db()
+        .collection()
+        .aggregate.mockReturnValue({ toArray: vi.fn().mockResolvedValue([docWith(metadata)]) });
+      const context = await plugin.retrieveContext('query');
+      return (context.metadata as { topResults: Array<Record<string, unknown>> }).topResults[0]!;
+    };
+
+    it('forwards metadata.fields to the host', async () => {
+      const fields = { Client: ['Advocate Health Care'], Size: ['226,454 sf'] };
+      const result = await topResultFor({ fields });
+      expect(result.fields).toEqual(fields);
+    });
+
+    it('does not invent the key when the document has no fields', async () => {
+      // The pool can bring hundreds of documents per turn: an empty key on each one is dead weight
+      // in the payload. Same criterion as `price`, `colors` and the rest of the conditionals.
+      const result = await topResultFor({});
+      expect('fields' in result).toBe(false);
+    });
+
+    it('preserves the values unslugified', async () => {
+      const result = await topResultFor({ fields: { Size: ['226,454 sf'] } });
+      expect((result.fields as Record<string, string[]>).Size).toEqual(['226,454 sf']);
+    });
+  });
+
   describe('constructor', () => {
     it('should set default values', () => {
       expect(plugin.name).toBe('web-rag');

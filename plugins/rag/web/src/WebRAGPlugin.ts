@@ -823,6 +823,14 @@ export class WebRAGPlugin implements RAGPlugin {
           ...(doc.metadata.availability ? { availability: doc.metadata.availability } : {}),
           ...(doc.metadata.colors ? { colors: doc.metadata.colors } : {}),
           ...(doc.metadata.colorImages ? { colorImages: doc.metadata.colorImages } : {}),
+          // Campos descubiertos por la herramienta de taxonomia del host: datos por entidad
+          // (Client, Size, Location) que describen la ficha sin particionar el corpus. Viajan
+          // CRUDOS, sin slugificar, porque su destino es una card y el contexto compacto del
+          // modelo — no un filtro de match exacto como `facetTags`.
+          //
+          // Condicional como sus vecinos: el pool puede traer cientos de documentos por turno y una
+          // clave vacia en cada uno es peso muerto en el payload.
+          ...(doc.metadata.fields ? { fields: doc.metadata.fields } : {}),
           score: doc.score,
         })),
       },
