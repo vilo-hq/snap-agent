@@ -1,124 +1,160 @@
 import { describe, expect, it } from 'vitest';
 import {
-  hardExcludePage,
-  inferTypeFromUrl,
+  DEFAULT_JUNK_TITLE_PATTERNS,
+  DEFAULT_JUNK_URL_PATTERNS,
+  STOREFRONT_URL_PATTERNS,
+  extractPathSegments,
+  extractSchemaTypes,
+  matchesAny,
   normalizeDisplayTitle,
-  resolvePageCardMetadata,
+  resolvePageDisplayMetadata,
 } from '../src/pageCardMetadata';
 
-describe('pageCardMetadata', () => {
+describe('normalizeDisplayTitle', () => {
   it('normalizes SEO title suffixes', () => {
     expect(normalizeDisplayTitle('Habitaciones | Eco Hotel Punta Brava')).toBe('Habitaciones');
+    expect(normalizeDisplayTitle('Riverside Medical Center | Example Studio')).toBe(
+      'Riverside Medical Center',
+    );
   });
 
-  it('hard excludes thank-you pages', () => {
-    expect(hardExcludePage('https://hotel.com/gracias-por-reservar', 'Gracias por reservar')).toBe(true);
+  /** The minimum indices exist so a short leading segment is not eaten by an early separator. */
+  it('leaves a short leading segment alone', () => {
+    expect(normalizeDisplayTitle('Casa | Muy Larga Marca')).toBe('Casa | Muy Larga Marca');
+  });
+});
+
+describe('observations — the page speaks, the plugin does not interpret', () => {
+  /**
+   * The case that drove the change: the site declares `Person`. `SCHEMA_TYPE_MAP` used to flatten
+   * that to `detail`, and the host had to rediscover the class from the URL with duplicated regexes.
+   */
+  it('reports the declared @type verbatim instead of flattening it', () => {
+    const html = `<html><head><script type="application/ld+json">
+      {"@type":"Person","name":"Oscar Cobb"}
+    </script></head><body></body></html>`;
+    expect(extractSchemaTypes(html)).toEqual(['person']);
   });
 
-  it('infers detail from habitaciones URL', () => {
-    expect(inferTypeFromUrl('https://www.puntabravachoco.com/habitaciones')).toBe('listing');
-    expect(inferTypeFromUrl('https://hotel.com/rooms/superior-king')).toBe('detail');
+  it('walks @graph and keeps every declared type', () => {
+    const html = `<html><head><script type="application/ld+json">
+      {"@graph":[{"@type":"WebPage"},{"@type":["NewsArticle","CreativeWork"]}]}
+    </script></head><body></body></html>`;
+    expect(extractSchemaTypes(html).sort()).toEqual(['creativework', 'newsarticle', 'webpage']);
   });
 
-  it('classifies habitaciones as card eligible detail/listing', () => {
-    const meta = resolvePageCardMetadata({
-      url: 'https://www.puntabravachoco.com/habitaciones',
-      title: 'Habitaciones | Eco Hotel Punta Brava',
-      description: 'La habitaciones de nuestro hotel...',
+  it('flags offers without a readable @type', () => {
+    const html = `<html><head><script type="application/ld+json">
+      {"name":"Widget","offers":{"price":"10"}}
+    </script></head><body></body></html>`;
+    expect(extractSchemaTypes(html)).toContain('offer');
+  });
+
+  it('survives a broken JSON-LD block without losing the good ones', () => {
+    const html = `<html><head>
+      <script type="application/ld+json">{ roto </script>
+      <script type="application/ld+json">{"@type":"Product"}</script>
+    </head><body></body></html>`;
+    expect(extractSchemaTypes(html)).toEqual(['product']);
+  });
+
+  it('exposes path segments so the caller can key on the collection slug', () => {
+    expect(extractPathSegments('https://example.com/our-work/projects/acme-tower')).toEqual([
+      'our-work',
+      'projects',
+      'acme-tower',
+    ]);
+    expect(extractPathSegments('no soy una url')).toEqual([]);
+  });
+
+  it('emits presence signals, not verdicts', () => {
+    const html = `<html><head>
+      <meta property="og:type" content="article" />
+      <meta property="article:published_time" content="2026-01-01" />
+      <meta name="author" content="Jane" />
+    </head><body><h1>Titulo</h1></body></html>`;
+    const r = resolvePageDisplayMetadata({
+      url: 'https://example.com/news/algo',
+      headingTitle: 'Titulo',
+      html,
+      hasPriceSignal: false,
     });
-    expect(meta.cardEligible).toBe(true);
-    expect(meta.displayTitle).toBe('Habitaciones');
-  });
-
-  it('classifies board games as amenity eligible', () => {
-    const meta = resolvePageCardMetadata({
-      url: 'https://www.puntabravachoco.com/service-page/juegos-de-mesa',
-      title: 'JUEGOS DE MESA | Eco Hotel',
+    expect(r.observations.ogType).toBe('article');
+    expect(r.observations.signals).toEqual({
+      hasPrice: false,
+      hasPublishDate: true,
+      hasAuthor: true,
+      hasH1: true,
     });
-    expect(meta.type).toBe('amenity');
-    expect(meta.cardEligible).toBe(true);
   });
 
-  it('excludes promotion pages from cards', () => {
-    const meta = resolvePageCardMetadata({
-      url: 'https://myramseyhotel.com/inflation-buster-sale/',
-      title: 'Inflation Buster Sale – The Ramsey',
+  /** What it NO LONGER decides: not the role, not eligibility, not the weight. */
+  it('returns no type, cardEligible or cardPriority', () => {
+    const r = resolvePageDisplayMetadata({
+      url: 'https://example.com/projects/acme',
+      title: 'Acme Tower | Example Studio',
+      html: '<html><body><h1>Acme Tower</h1></body></html>',
     });
-    expect(meta.type).toBe('promotion');
-    expect(meta.cardEligible).toBe(false);
+    expect(r).not.toHaveProperty('type');
+    expect(r).not.toHaveProperty('cardEligible');
+    expect(r).not.toHaveProperty('cardPriority');
+    expect(r.displayTitle).toBe('Acme Tower');
   });
 
-  it('excludes home path', () => {
-    expect(hardExcludePage('https://hotel.com/', 'Home')).toBe(true);
+  it('works without html at all', () => {
+    const r = resolvePageDisplayMetadata({ url: 'https://example.com/a/b', title: 'A' });
+    expect(r.observations.schemaTypes).toEqual([]);
+    expect(r.observations.ogType).toBeUndefined();
+    expect(r.observations.pathSegments).toEqual(['a', 'b']);
+  });
+});
+
+describe('exported patterns — offered, not applied', () => {
+  it('matches genuine utility pages', () => {
+    for (const url of [
+      'https://shop.example.com/checkout',
+      'https://shop.example.com/cart',
+      'https://example.com/login',
+      'https://example.com/privacy-policy',
+      'https://example.com/404',
+      'https://example.com/wp-admin/',
+    ]) {
+      expect(matchesAny(url, DEFAULT_JUNK_URL_PATTERNS), url).toBe(true);
+    }
   });
 
-  it('infers detail for project, people, and perspective entity URLs', () => {
+  /**
+   * The reason for the change, as an assertion: `/news/` was in the hard-exclusion list and it was
+   * ALWAYS applied. For an architecture firm or a publisher, news is the product — and getting it
+   * back cost one backfill script per class.
+   */
+  it('does NOT treat editorial content as junk', () => {
+    for (const url of [
+      'https://example.com/news/2026/topping-out',
+      'https://example.com/press/release',
+      'https://example.com/blog/post',
+      'https://example.com/careers',
+      'https://example.com/our-firm/locations/riverside',
+    ]) {
+      expect(matchesAny(url, DEFAULT_JUNK_URL_PATTERNS), url).toBe(false);
+    }
+  });
+
+  it('keeps retail patterns available for storefronts that want them', () => {
     expect(
-      inferTypeFromUrl('https://example.com/our-work/projects/healthcare-campus'),
-    ).toBe('detail');
-    expect(inferTypeFromUrl('https://example.com/our-firm/people/jane-doe')).toBe('detail');
-    expect(
-      inferTypeFromUrl('https://example.com/our-work/perspectives/designing-for-wellness'),
-    ).toBe('detail');
+      matchesAny('https://shop.example.com/inflation-buster-sale', STOREFRONT_URL_PATTERNS.promotion),
+    ).toBe(true);
+    expect(matchesAny('https://shop.example.com/offers/summer', STOREFRONT_URL_PATTERNS.promotion)).toBe(
+      true,
+    );
+    // And they are not imposed on a site that is not a shop.
+    expect(matchesAny('https://example.com/projects/acme', STOREFRONT_URL_PATTERNS.promotion)).toBe(
+      false,
+    );
   });
 
-  it('infers listing for collection index URLs', () => {
-    expect(inferTypeFromUrl('https://example.com/our-work/projects')).toBe('listing');
-    expect(inferTypeFromUrl('https://example.com/our-firm/people')).toBe('listing');
-  });
-
-  it('classifies professional entity pages as card eligible detail', () => {
-    const meta = resolvePageCardMetadata({
-      url: 'https://example.com/our-work/projects/campus-renewal',
-      title: 'Campus Renewal | Example Firm',
-      headingTitle: 'Campus Renewal',
-    });
-    expect(meta.type).toBe('detail');
-    expect(meta.cardEligible).toBe(true);
-    expect(meta.cardPriority).toBe(10);
-    expect(meta.displayTitle).toBe('Campus Renewal');
-  });
-
-  it('infers detail from Salas Inmobiliaria propiedad URL', () => {
-    expect(
-      inferTypeFromUrl(
-        'https://www.salasinmobiliaria.com.ar/propiedad/4745-amarras-center-torre.html',
-      ),
-    ).toBe('detail');
-  });
-
-  it('classifies Salas Inmobiliaria propiedad as card eligible detail', () => {
-    const meta = resolvePageCardMetadata({
-      url: 'https://www.salasinmobiliaria.com.ar/propiedad/4745-amarras-center-torre.html',
-      title: 'Amarras Center Torre | Salas Inmobiliaria',
-      headingTitle: 'Amarras Center Torre',
-    });
-    expect(meta.type).toBe('detail');
-    expect(meta.cardEligible).toBe(true);
-    expect(meta.cardPriority).toBe(10);
-  });
-
-  it('infers detail from REMAX listings URL', () => {
-    expect(
-      inferTypeFromUrl(
-        'https://www.remax.com.ar/listings/depto-en-alquiler-2-amb-luminoso-excelente',
-      ),
-    ).toBe('detail');
-  });
-
-  it('infers detail from Argenprop property slug', () => {
-    expect(
-      inferTypeFromUrl(
-        'https://www.argenprop.com/departamento-en-venta-en-palermo-chico-5-ambientes--18799423',
-      ),
-    ).toBe('detail');
-  });
-
-  it('infers detail from Zonaprop clasificado URL', () => {
-    expect(
-      inferTypeFromUrl(
-        'https://www.zonaprop.com.ar/propiedades/clasificado/alclapin-alquiler-departamento-monoambiente-en-almagro-59054165.html',
-      ),
-    ).toBe('detail');
+  it('matches junk titles when the URL says nothing', () => {
+    expect(matchesAny('Thank you for your purchase', DEFAULT_JUNK_TITLE_PATTERNS)).toBe(true);
+    expect(matchesAny('Riverside | Example Studio', DEFAULT_JUNK_TITLE_PATTERNS)).toBe(false);
   });
 });
