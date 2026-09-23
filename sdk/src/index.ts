@@ -23,7 +23,7 @@ export type { PluginFactory } from './core/PluginRegistry';
 export { convertTool, convertToolPlugins } from './core/toolUtils';
 
 // Providers
-export { ProviderFactory, Models } from './providers';
+export { ProviderFactory, Models, ModelDisplayNames, displayNameForModel } from './providers';
 
 // Built-in (included with SDK)
 export { DefaultRAGPlugin } from './inc';

@@ -41,7 +41,7 @@ async function main() {
   const claudeAgent = await client.createAgent({
     name: 'Claude Assistant',
     provider: 'anthropic',
-    model: Models.Anthropic.CLAUDE_4_SONNET,
+    model: Models.Anthropic.CLAUDE_SONNET_5,
     instructions: 'You are Claude. Respond with "I am Claude" in your answer.',
     userId: 'user-123',
   });
@@ -51,7 +51,7 @@ async function main() {
   const geminiAgent = await client.createAgent({
     name: 'Gemini Assistant',
     provider: 'google',
-    model: Models.Google.GEMINI_2_FLASH,
+    model: Models.Google.GEMINI_3_8_FLASH,
     instructions: 'You are Gemini. Respond with "I am Gemini" in your answer.',
     userId: 'user-123',
   });

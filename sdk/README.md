@@ -92,7 +92,7 @@ const agent = await client.createAgent({
   name: 'Code Reviewer',
   instructions: 'You are an expert code reviewer. Provide constructive feedback.',
   provider: 'anthropic',
-  model: 'claude-3-5-sonnet-20241022',
+  model: 'claude-sonnet-5',
   userId: 'user-123',
 });
 
@@ -175,7 +175,7 @@ const gptAgent = await client.createAgent({
 const claudeAgent = await client.createAgent({
   name: 'Claude Agent',
   provider: 'anthropic',
-  model: Models.Anthropic.CLAUDE_35_SONNET,
+  model: Models.Anthropic.CLAUDE_SONNET_5,
   instructions: 'You are helpful.',
   userId: 'user-123',
 });
@@ -184,7 +184,7 @@ const claudeAgent = await client.createAgent({
 const geminiAgent = await client.createAgent({
   name: 'Gemini Agent',
   provider: 'google',
-  model: Models.Google.GEMINI_2_FLASH,
+  model: Models.Google.GEMINI_3_8_FLASH,
   instructions: 'You are helpful.',
   userId: 'user-123',
 });
