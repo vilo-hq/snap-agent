@@ -1,3 +1,4 @@
+import type { ReasoningEffort } from '../providers/reasoning';
 import type { Plugin, StoredPluginConfig } from './plugins';
 
 // ============================================================================
@@ -65,6 +66,11 @@ export interface AgentConfig {
   instructions: string;
   provider: ProviderType;
   model: string;
+  /**
+   * How much the model thinks before answering. Unset = the provider's default (unchanged
+   * behaviour). See `ReasoningEffort` for how each provider maps it.
+   */
+  reasoning?: ReasoningEffort;
   userId: string;
   metadata?: Record<string, any>;
   organizationId?: string;

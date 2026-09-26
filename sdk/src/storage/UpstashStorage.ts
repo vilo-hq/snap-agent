@@ -1,3 +1,4 @@
+import { isReasoningEffort } from '../providers/reasoning';
 import {
   StorageAdapter,
   AgentConfig,
@@ -44,6 +45,7 @@ interface StoredAgent {
   instructions: string;
   provider: string;
   model: string;
+  reasoning?: string;
   createdAt: string; // ISO string
   updatedAt: string; // ISO string
   files: string; // JSON stringified AgentFile[]
@@ -190,6 +192,7 @@ export class UpstashStorage implements StorageAdapter {
       instructions: config.instructions,
       provider: config.provider,
       model: config.model,
+      reasoning: config.reasoning,
       createdAt: now,
       updatedAt: now,
       files: JSON.stringify([]),
@@ -527,6 +530,7 @@ export class UpstashStorage implements StorageAdapter {
       instructions: stored.instructions,
       provider: stored.provider as AgentData['provider'],
       model: stored.model,
+      ...(isReasoningEffort(stored.reasoning) && { reasoning: stored.reasoning }),
       createdAt: new Date(stored.createdAt),
       updatedAt: new Date(stored.updatedAt),
       files: stored.files ? JSON.parse(stored.files) : [],

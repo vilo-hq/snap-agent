@@ -24,6 +24,8 @@ export { convertTool, convertToolPlugins } from './core/toolUtils';
 
 // Providers
 export { ProviderFactory, Models, ModelDisplayNames, displayNameForModel } from './providers';
+export { reasoningProviderOptions, isReasoningEffort, REASONING_EFFORTS } from './providers/reasoning';
+export type { ReasoningEffort } from './providers/reasoning';
 
 // Built-in (included with SDK)
 export { DefaultRAGPlugin } from './inc';

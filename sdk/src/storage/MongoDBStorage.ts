@@ -1,3 +1,4 @@
+import { isReasoningEffort } from '../providers/reasoning';
 import { MongoClient, Db, Collection, ObjectId } from 'mongodb';
 import {
   StorageAdapter,
@@ -22,6 +23,7 @@ interface AgentDocument {
   instructions: string;
   provider: string;
   model: string;
+  reasoning?: string;
   createdAt: Date;
   updatedAt: Date;
   files: AgentFile[];
@@ -118,6 +120,7 @@ export class MongoDBStorage implements StorageAdapter {
       instructions: config.instructions,
       provider: config.provider,
       model: config.model,
+      ...(config.reasoning && { reasoning: config.reasoning }),
       createdAt: new Date(),
       updatedAt: new Date(),
       files: [],
@@ -359,6 +362,7 @@ export class MongoDBStorage implements StorageAdapter {
       instructions: doc.instructions,
       provider: doc.provider as any,
       model: doc.model,
+      ...(isReasoningEffort(doc.reasoning) && { reasoning: doc.reasoning }),
       createdAt: doc.createdAt,
       updatedAt: doc.updatedAt,
       files: doc.files,

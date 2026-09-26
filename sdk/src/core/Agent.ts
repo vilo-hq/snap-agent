@@ -23,6 +23,7 @@ import type {
   URLIngestResult,
 } from '../types';
 import type { TokenMetrics, RAGMetrics } from '../types/plugins';
+import { reasoningProviderOptions, type ReasoningEffort } from '../providers/reasoning';
 
 // Type for messages accepted by the AI SDK
 type AIMessage = UserModelMessage | AssistantModelMessage;
@@ -45,6 +46,8 @@ export interface AgentGenerateOptions {
   buildSystemPrompt?: BuildSystemPromptFn;
   /** When true, tools are not passed to the provider. */
   disableTools?: boolean;
+  /** Overrides the agent's `reasoning` for this call only. */
+  reasoning?: ReasoningEffort;
   /**
    * RAG metrics override for analytics. Use when RAG is retrieved outside the
    * SDK pipeline (e.g. the host prefetches context and passes `useRAG: false`):
@@ -377,6 +380,11 @@ export class Agent {
     const stopWhen = tools
       ? stepCountIs(options?.maxToolSteps ?? 5)
       : undefined;
+    const providerOptions = reasoningProviderOptions(
+      this.data.provider,
+      this.data.model,
+      options?.reasoning ?? this.data.reasoning,
+    );
 
     let text: string;
     let parsed: T | undefined;
@@ -395,6 +403,7 @@ export class Agent {
           messages: beforeResult.messages,
           system: systemPrompt,
           maxRetries: 0,
+          ...(providerOptions && { providerOptions }),
           ...(tools && { tools }),
           ...(stopWhen && { stopWhen }),
           experimental_output: Output.object({ schema: outputSchema }),
@@ -412,6 +421,7 @@ export class Agent {
           messages: beforeResult.messages,
           system: jsonSystemPrompt,
           maxRetries: 0,
+          ...(providerOptions && { providerOptions }),
           ...(tools && { tools }),
           ...(stopWhen && { stopWhen }),
         }));
@@ -431,6 +441,7 @@ export class Agent {
           messages: beforeResult.messages,
           system: systemPrompt,
           maxRetries: 0,
+          ...(providerOptions && { providerOptions }),
           ...(tools && { tools }),
           ...(stopWhen && { stopWhen }),
         }));
@@ -574,6 +585,11 @@ export class Agent {
       const stopWhen = tools
         ? stepCountIs(options?.maxToolSteps ?? 5)
         : undefined;
+      const providerOptions = reasoningProviderOptions(
+        this.data.provider,
+        this.data.model,
+        options?.reasoning ?? this.data.reasoning,
+      );
 
       const llmStart = Date.now();
       const startStream = () =>
@@ -582,6 +598,7 @@ export class Agent {
           messages: beforeResult.messages,
           system: systemPrompt,
           maxRetries: 0,
+          ...(providerOptions && { providerOptions }),
           ...(tools && { tools }),
           ...(stopWhen && { stopWhen }),
         });
