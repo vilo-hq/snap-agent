@@ -82,6 +82,7 @@
   "license": "MIT",
   "peerDependencies": {
     "@ai-sdk/anthropic": "^3.0.0",
+    "@ai-sdk/cerebras": "^2.0.0",
     "@ai-sdk/google": "^3.0.0",
     "@ai-sdk/groq": "^3.0.0",
     "@ai-sdk/huggingface": "^1.0.0",
@@ -111,10 +112,14 @@
     },
     "@ai-sdk/groq": {
       "optional": true
+    },
+    "@ai-sdk/cerebras": {
+      "optional": true
     }
   },
   "devDependencies": {
     "@ai-sdk/anthropic": "^3.0.64",
+    "@ai-sdk/cerebras": "^2.0.85",
     "@ai-sdk/google": "^3.0.54",
     "@ai-sdk/groq": "^3.0.69",
     "@ai-sdk/huggingface": "^1.0.39",

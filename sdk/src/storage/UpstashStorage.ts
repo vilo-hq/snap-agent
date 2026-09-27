@@ -1,3 +1,4 @@
+import { isModelTarget } from '../core/modelRouting';
 import { isReasoningEffort } from '../providers/reasoning';
 import {
   StorageAdapter,
@@ -46,6 +47,7 @@ interface StoredAgent {
   provider: string;
   model: string;
   reasoning?: string;
+  fallback?: string; // JSON stringified ModelTarget
   createdAt: string; // ISO string
   updatedAt: string; // ISO string
   files: string; // JSON stringified AgentFile[]
@@ -193,6 +195,7 @@ export class UpstashStorage implements StorageAdapter {
       provider: config.provider,
       model: config.model,
       reasoning: config.reasoning,
+      fallback: config.fallback ? JSON.stringify(config.fallback) : undefined,
       createdAt: now,
       updatedAt: now,
       files: JSON.stringify([]),
@@ -240,7 +243,7 @@ export class UpstashStorage implements StorageAdapter {
 
     for (const [key, value] of Object.entries(updates)) {
       if (value !== undefined) {
-        if (key === 'metadata') {
+        if (key === 'metadata' || key === 'fallback') {
           fields.push(key, JSON.stringify(value));
         } else {
           fields.push(key, String(value));
@@ -531,6 +534,7 @@ export class UpstashStorage implements StorageAdapter {
       provider: stored.provider as AgentData['provider'],
       model: stored.model,
       ...(isReasoningEffort(stored.reasoning) && { reasoning: stored.reasoning }),
+      ...parseFallback(stored.fallback),
       createdAt: new Date(stored.createdAt),
       updatedAt: new Date(stored.updatedAt),
       files: stored.files ? JSON.parse(stored.files) : [],
@@ -611,3 +615,13 @@ export class UpstashStorage implements StorageAdapter {
   }
 }
 
+
+function parseFallback(raw: string | undefined): { fallback?: AgentData['fallback'] } {
+  if (!raw) return {};
+  try {
+    const v = JSON.parse(raw);
+    return isModelTarget(v) ? { fallback: v } : {};
+  } catch {
+    return {};
+  }
+}

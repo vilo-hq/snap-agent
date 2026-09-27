@@ -224,6 +224,7 @@ export class AgentClient {
       useRAG: request.useRAG,
       ragFilters: request.ragFilters,
       threadId: thread.id,
+      fallback: request.fallback,
     });
 
     // Check empty response policy (default: error)
@@ -286,6 +287,8 @@ export class AgentClient {
           useRAG: request.useRAG,
           ragFilters: request.ragFilters,
           threadId: thread.id,
+          fallback: request.fallback,
+          firstTokenTimeoutMs: request.firstTokenTimeoutMs,
         }
       );
     } catch (error) {

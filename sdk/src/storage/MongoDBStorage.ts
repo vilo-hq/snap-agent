@@ -1,3 +1,4 @@
+import { isModelTarget } from '../core/modelRouting';
 import { isReasoningEffort } from '../providers/reasoning';
 import { MongoClient, Db, Collection, ObjectId } from 'mongodb';
 import {
@@ -24,6 +25,7 @@ interface AgentDocument {
   provider: string;
   model: string;
   reasoning?: string;
+  fallback?: { provider: string; model: string; reasoning?: string };
   createdAt: Date;
   updatedAt: Date;
   files: AgentFile[];
@@ -121,6 +123,7 @@ export class MongoDBStorage implements StorageAdapter {
       provider: config.provider,
       model: config.model,
       ...(config.reasoning && { reasoning: config.reasoning }),
+      ...(config.fallback && { fallback: config.fallback }),
       createdAt: new Date(),
       updatedAt: new Date(),
       files: [],
@@ -363,6 +366,7 @@ export class MongoDBStorage implements StorageAdapter {
       provider: doc.provider as any,
       model: doc.model,
       ...(isReasoningEffort(doc.reasoning) && { reasoning: doc.reasoning }),
+      ...(isModelTarget(doc.fallback) && { fallback: doc.fallback }),
       createdAt: doc.createdAt,
       updatedAt: doc.updatedAt,
       files: doc.files,

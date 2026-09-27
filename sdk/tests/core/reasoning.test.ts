@@ -64,6 +64,13 @@ describe('reasoningProviderOptions', () => {
     });
   });
 
+  describe('cerebras', () => {
+    it('maps gpt-oss with the same low floor', () => {
+      expect(r('cerebras', 'gpt-oss-120b', 'off')).toEqual({ cerebras: { reasoningEffort: 'low' } });
+      expect(r('cerebras', 'gpt-oss-120b', 'medium')).toEqual({ cerebras: { reasoningEffort: 'medium' } });
+    });
+  });
+
   it('ignores providers without a reasoning control', () => {
     expect(r('huggingface', 'meta-llama/Llama-3.3-70B-Instruct', 'off')).toBeUndefined();
   });

@@ -34,6 +34,7 @@ export type ReasoningProviderOptions = Record<string, Record<string, any>>;
  *   @ai-sdk/anthropic `thinking`: adaptive | enabled{budgetTokens} | disabled, `effort`: low..max
  *   @ai-sdk/google    `thinkingConfig`: { thinkingLevel: minimal..high } | { thinkingBudget: n }
  *   @ai-sdk/groq      `reasoningEffort`: none | default | low | medium | high
+ *   @ai-sdk/cerebras  `reasoningEffort` (openai-compatible → `reasoning_effort`); gpt-oss default: medium
  */
 export function reasoningProviderOptions(
   provider: ProviderType,
@@ -57,8 +58,13 @@ export function reasoningProviderOptions(
       return thinkingConfig ? { google: { thinkingConfig } } : undefined;
     }
     case 'groq': {
-      const reasoningEffort = groqEffort(id, effort);
+      const reasoningEffort = gptOssEffort(id, effort);
       return reasoningEffort ? { groq: { reasoningEffort } } : undefined;
+    }
+    case 'cerebras': {
+      // OpenAI-compatible: reads providerOptions.cerebras.reasoningEffort → `reasoning_effort`.
+      const reasoningEffort = gptOssEffort(id, effort);
+      return reasoningEffort ? { cerebras: { reasoningEffort } } : undefined;
     }
     default:
       return undefined;
@@ -123,10 +129,10 @@ function googleThinkingConfig(id: string, effort: ReasoningEffort): Record<strin
   return undefined; // older families have no thinking control
 }
 
-// ── Groq ──────────────────────────────────────────────────────────────────────
+// ── Groq / Cerebras (gpt-oss) ─────────────────────────────────────────────────
 
-function groqEffort(id: string, effort: ReasoningEffort): string | undefined {
+function gptOssEffort(id: string, effort: ReasoningEffort): string | undefined {
   // gpt-oss always reasons; `low` is its floor (same as OpenAI's o-series).
   if (id.includes('gpt-oss')) return effort === 'off' ? 'low' : effort;
-  return undefined; // other Groq models: no known reasoning control, send nothing
+  return undefined; // other models on these hosts: no known reasoning control, send nothing
 }

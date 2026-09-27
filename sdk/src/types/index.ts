@@ -1,3 +1,4 @@
+import type { ModelTarget } from '../core/modelRouting';
 import type { ReasoningEffort } from '../providers/reasoning';
 import type { Plugin, StoredPluginConfig } from './plugins';
 
@@ -5,7 +6,7 @@ import type { Plugin, StoredPluginConfig } from './plugins';
 // Provider Types
 // ============================================================================
 
-export type ProviderType = 'openai' | 'anthropic' | 'google' | 'huggingface' | 'groq';
+export type ProviderType = 'openai' | 'anthropic' | 'google' | 'huggingface' | 'groq' | 'cerebras';
 
 export interface ProviderConfig {
   openai?: {
@@ -22,6 +23,10 @@ export interface ProviderConfig {
   };
   /** Groq serves open-weight models (e.g. gpt-oss) on LPUs at several hundred tokens/s. */
   groq?: {
+    apiKey: string;
+  };
+  /** Cerebras serves open-weight models (e.g. gpt-oss-120b) on wafer-scale hardware, ~3000 tokens/s. */
+  cerebras?: {
     apiKey: string;
   };
 }
@@ -75,6 +80,11 @@ export interface AgentConfig {
    * behaviour). See `ReasoningEffort` for how each provider maps it.
    */
   reasoning?: ReasoningEffort;
+  /**
+   * Model that answers when `provider`/`model` is down or too slow to start (see modelRouting.ts).
+   * Should be another provider — a fallback on the same one shares its outages.
+   */
+  fallback?: ModelTarget;
   userId: string;
   metadata?: Record<string, any>;
   organizationId?: string;
@@ -152,6 +162,10 @@ export interface ChatRequest {
   ragFilters?: Record<string, any>; // Filters for RAG plugins
   contextLength?: number; // Number of messages to include in context (default: 20)
   emptyResponsePolicy?: 'allow' | 'error'; // How to handle empty responses (default: 'error')
+  /** Override the agent's fallback model for this call; `null` disables failover. */
+  fallback?: ModelTarget | null;
+  /** First-token deadline before failing over (streaming only; default 2500 ms). */
+  firstTokenTimeoutMs?: number;
 }
 
 export interface ChatResponse {

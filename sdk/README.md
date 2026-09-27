@@ -157,7 +157,7 @@ await client.chatStream(
 
 ## Multi-Provider Support
 
-Switch between OpenAI, Anthropic, and Google models easily:
+Switch between OpenAI, Anthropic, Google, Groq and Cerebras models easily:
 
 ```typescript
 import { Models } from '@snap-agent/core';
@@ -188,7 +188,44 @@ const geminiAgent = await client.createAgent({
   instructions: 'You are helpful.',
   userId: 'user-123',
 });
+// Cerebras (gpt-oss-120b on Cerebras hardware; needs `@ai-sdk/cerebras`)
+const fastAgent = await client.createAgent({
+  name: 'Fast Agent',
+  provider: 'cerebras',
+  model: Models.Cerebras.GPT_OSS_120B,
+  reasoning: 'off', // gpt-oss floor: sent as reasoning_effort=low
+  instructions: 'You are helpful.',
+  userId: 'user-123',
+});
 ```
+
+Groq (`@ai-sdk/groq`) and Cerebras (`@ai-sdk/cerebras`) are optional peer dependencies. Install the one you use and pass its key as `providers.groq` / `providers.cerebras`.
+
+### Reasoning
+
+`reasoning: 'off' | 'low' | 'medium' | 'high'` is one provider-neutral setting. The SDK translates it into each provider's own option. `off` means as little thinking as the model allows. Leaving it unset keeps the provider default.
+
+### Model Failover
+
+An agent can name a `fallback` model on another provider. The turn moves to it when the primary fails **before producing anything**:
+
+```typescript
+await client.createAgent({
+  // ...
+  provider: 'cerebras',
+  model: Models.Cerebras.GPT_OSS_120B,
+  reasoning: 'off',
+  fallback: { provider: 'openai', model: Models.OpenAI.GPT4O },
+});
+```
+
+- **Errors.** Any error before the first text or tool call sends the turn to the fallback. The primary is not retried first.
+- **First-token deadline.** When streaming, the primary has `firstTokenTimeoutMs` (default 2500) to emit text or a tool call.
+- **Circuit breaker.** After 3 consecutive failures, a primary is skipped for 30 s, then one request probes it. Tune it with `modelCircuitBreaker.configure({ failureThreshold, cooldownMs })`.
+- **No replays.** Once the primary has streamed text or called a tool, the turn is committed to it. A later failure is reported, never replayed, so tools with side effects never run twice.
+- **Observability.** Response metadata carries `servedBy: { provider, model, fallback?: { from, reason, error } }`. Analytics record the model that actually answered.
+- **Per-call override.** Pass `fallback: null` to `chat` / `streamResponse` options to disable it for one call.
+- **Prompts per model.** `buildSystemPrompt` receives `ctx.provider` and `ctx.model`, so a fallback turn can use a prompt tuned for that model.
 
 ## Plugin Architecture
 
@@ -788,6 +825,8 @@ try {
 OPENAI_API_KEY=sk-...
 ANTHROPIC_API_KEY=sk-ant-...
 GOOGLE_API_KEY=AI...
+GROQ_API_KEY=gsk_...          # optional
+CEREBRAS_API_KEY=csk-...      # optional
 
 # Storage (choose one)
 MONGODB_URI=mongodb://localhost:27017/agents        # Server environments

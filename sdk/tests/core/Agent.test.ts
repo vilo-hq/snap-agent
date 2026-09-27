@@ -41,10 +41,14 @@ describe('Agent.streamResponse', () => {
       providerFactory as any
     );
 
+    // streamResponse reads `fullStream` (it needs tool-call parts to know when a turn is committed).
     mockStreamText.mockReturnValue({
-      textStream: (async function* () {
-        yield 'Hello';
+      fullStream: (async function* () {
+        yield { type: 'start' };
+        yield { type: 'text-delta', id: 't1', text: 'Hello' };
+        yield { type: 'finish' };
       })(),
+      usage: Promise.resolve(undefined),
     });
   });
 

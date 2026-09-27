@@ -4,7 +4,7 @@ import { ProviderType, ProviderConfig, ProviderNotFoundError } from '../types';
 
 /**
  * Provider factory for creating language model instances
- * Supports OpenAI, Anthropic, Google, Groq, and Hugging Face providers via Vercel AI SDK
+ * Supports OpenAI, Anthropic, Google, Groq, Cerebras, and Hugging Face providers via Vercel AI SDK
  */
 export class ProviderFactory {
   private config: ProviderConfig;
@@ -116,6 +116,25 @@ export class ProviderFactory {
         break;
       }
 
+      case 'cerebras': {
+        if (!this.config.cerebras?.apiKey) {
+          throw new ProviderNotFoundError('Cerebras API key not configured');
+        }
+        // Dynamic import for edge runtime compatibility
+        try {
+          const { createCerebras } = await import('@ai-sdk/cerebras');
+          const cerebras = createCerebras({
+            apiKey: this.config.cerebras.apiKey,
+          });
+          model = cerebras(modelName);
+        } catch (error) {
+          throw new ProviderNotFoundError(
+            'Cerebras provider not installed. Run: npm install @ai-sdk/cerebras'
+          );
+        }
+        break;
+      }
+
       default:
         throw new ProviderNotFoundError(`Unknown provider: ${provider}`);
     }
@@ -139,6 +158,8 @@ export class ProviderFactory {
         return !!this.config.huggingface?.apiKey;
       case 'groq':
         return !!this.config.groq?.apiKey;
+      case 'cerebras':
+        return !!this.config.cerebras?.apiKey;
       default:
         return false;
     }
@@ -155,6 +176,7 @@ export class ProviderFactory {
     if (this.config.google?.apiKey) providers.push('google');
     if (this.config.huggingface?.apiKey) providers.push('huggingface');
     if (this.config.groq?.apiKey) providers.push('groq');
+    if (this.config.cerebras?.apiKey) providers.push('cerebras');
 
     return providers;
   }
@@ -259,6 +281,11 @@ export const Models = {
     GPT_OSS_120B: 'openai/gpt-oss-120b',
     GPT_OSS_20B: 'openai/gpt-oss-20b',
   },
+  Cerebras: {
+    // Same open-weight model as Groq's, but Cerebras ids carry no `openai/` prefix.
+    // inference-docs.cerebras.ai, checked September 2026: ~3000 tok/s. Reasoning floor: low.
+    GPT_OSS_120B: 'gpt-oss-120b',
+  },
   HuggingFace: {
     META_LLAMA_70B: 'meta-llama/Llama-3.3-70B-Instruct',
     META_LLAMA_8B:  'meta-llama/Meta-Llama-3.1-8B-Instruct',
@@ -322,6 +349,7 @@ export const ModelDisplayNames: Record<string, string> = {
   'gemini-3-flash-preview': 'Gemini 3 Flash (preview)',
   'openai/gpt-oss-120b': 'GPT-OSS 120B (Groq)',
   'openai/gpt-oss-20b': 'GPT-OSS 20B (Groq)',
+  'gpt-oss-120b': 'GPT-OSS 120B (Cerebras)',
   'meta-llama/Llama-3.3-70B-Instruct': 'Llama 3.3 70B Instruct',
   'meta-llama/Meta-Llama-3.1-8B-Instruct': 'Llama 3.1 8B Instruct',
   'mistralai/Mistral-Nemo-Instruct-2407': 'Mistral Nemo Instruct',

@@ -45,3 +45,14 @@ describe('ProviderFactory: groq', () => {
     expect((model as { modelId?: string }).modelId).toBe('openai/gpt-oss-120b');
   });
 });
+
+describe('ProviderFactory: cerebras', () => {
+  it('is configured only with a key and builds a model', async () => {
+    const { ProviderFactory } = await import('../../src/providers');
+    expect(new ProviderFactory({}).isProviderConfigured('cerebras')).toBe(false);
+    const factory = new ProviderFactory({ cerebras: { apiKey: 'test-key' } });
+    expect(factory.getConfiguredProviders()).toContain('cerebras');
+    const model = await factory.getModel('cerebras', Models.Cerebras.GPT_OSS_120B);
+    expect((model as { modelId?: string }).modelId).toBe('gpt-oss-120b');
+  });
+});

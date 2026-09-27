@@ -26,6 +26,14 @@ export { convertTool, convertToolPlugins } from './core/toolUtils';
 export { ProviderFactory, Models, ModelDisplayNames, displayNameForModel } from './providers';
 export { reasoningProviderOptions, isReasoningEffort, REASONING_EFFORTS } from './providers/reasoning';
 export type { ReasoningEffort } from './providers/reasoning';
+export {
+  ModelCircuitBreaker,
+  modelCircuitBreaker,
+  DEFAULT_FIRST_TOKEN_TIMEOUT_MS,
+  FirstTokenTimeoutError,
+  isModelTarget,
+} from './core/modelRouting';
+export type { ModelTarget, ServedBy, FallbackReason, CircuitBreakerOptions } from './core/modelRouting';
 
 // Built-in (included with SDK)
 export { DefaultRAGPlugin } from './inc';

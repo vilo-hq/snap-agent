@@ -21,9 +21,20 @@ import {
 import type {
   URLSource,
   URLIngestResult,
+  ProviderType,
 } from '../types';
 import type { TokenMetrics, RAGMetrics } from '../types/plugins';
 import { reasoningProviderOptions, type ReasoningEffort } from '../providers/reasoning';
+import {
+  DEFAULT_FIRST_TOKEN_TIMEOUT_MS,
+  FirstTokenTimeoutError,
+  deadline,
+  modelCircuitBreaker,
+  targetKey,
+  type FallbackReason,
+  type ModelTarget,
+  type ServedBy,
+} from './modelRouting';
 
 // Type for messages accepted by the AI SDK
 type AIMessage = UserModelMessage | AssistantModelMessage;
@@ -32,6 +43,12 @@ type AIMessage = UserModelMessage | AssistantModelMessage;
 export type BuildSystemPromptFn = (ctx: {
   instructions: string;
   ragContexts: string[];
+  /**
+   * The model that will serve THIS attempt. With a fallback configured the prompt is rebuilt for the
+   * fallback, so a host can keep one prompt per model family.
+   */
+  provider: ProviderType;
+  model: string;
 }) => string;
 
 export interface AgentGenerateOptions {
@@ -48,6 +65,13 @@ export interface AgentGenerateOptions {
   disableTools?: boolean;
   /** Overrides the agent's `reasoning` for this call only. */
   reasoning?: ReasoningEffort;
+  /** Overrides the agent's `fallback` for this call; `null` disables failover for the call. */
+  fallback?: ModelTarget | null;
+  /**
+   * Streaming only: how long the primary may take to show text or start a tool call before the turn
+   * moves to the fallback. Ignored without a fallback. Default {@link DEFAULT_FIRST_TOKEN_TIMEOUT_MS}.
+   */
+  firstTokenTimeoutMs?: number;
   /**
    * RAG metrics override for analytics. Use when RAG is retrieved outside the
    * SDK pipeline (e.g. the host prefetches context and passes `useRAG: false`):
@@ -79,10 +103,11 @@ function extractTextContent(content: AIMessage['content']): string {
 function resolveSystemPromptAndRag(
   instructions: string,
   ragContexts: string[],
-  buildSystemPrompt?: BuildSystemPromptFn,
+  buildSystemPrompt: BuildSystemPromptFn | undefined,
+  target: ModelTarget,
 ): string {
   if (buildSystemPrompt) {
-    return buildSystemPrompt({ instructions, ragContexts });
+    return buildSystemPrompt({ instructions, ragContexts, provider: target.provider, model: target.model });
   }
   if (ragContexts.length > 0) {
     return instructions + '\n\n' + ragContexts.join('\n\n');
@@ -139,6 +164,34 @@ async function callLlmWithRetry<R>(fn: () => Promise<R>): Promise<{ value: R; re
     }
   }
 }
+
+/** The primary target, the fallback (if any) and whether the breaker says to skip the primary. */
+interface RoutePlan {
+  primary: ModelTarget;
+  fallback?: ModelTarget;
+  skipPrimary: boolean;
+}
+
+/**
+ * Wraps tool `execute` functions to flag when any tool actually ran. A turn whose tools already ran
+ * must never be replayed on the fallback (see modelRouting.ts).
+ */
+function trackToolRuns<T extends Record<string, any> | undefined>(tools: T, onRun: () => void): T {
+  if (!tools) return tools;
+  const out: Record<string, any> = {};
+  for (const [name, tool] of Object.entries(tools)) {
+    out[name] = typeof tool?.execute === 'function'
+      ? { ...tool, execute: (...args: any[]) => { onRun(); return tool.execute(...args); } }
+      : tool;
+  }
+  return out as T;
+}
+
+const errorMessage = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+
+/** Stream parts that prove the model is alive AND commit the turn to it. */
+const isCommittingPart = (p: { type: string; text?: string }): boolean =>
+  (p.type === 'text-delta' && !!p.text) || p.type === 'tool-input-start' || p.type === 'tool-call';
 
 /**
  * Agent class representing an AI agent with persistent state
@@ -366,90 +419,106 @@ export class Agent {
       ragMetadata = allMetadata;
     }
 
-    const systemPrompt = resolveSystemPromptAndRag(
-      this.data.instructions,
-      ragContexts,
-      options?.buildSystemPrompt,
-    );
-
     // Generate response
-    const model = await this.providerFactory.getModel(this.data.provider, this.data.model);
     const tools = options?.disableTools ? undefined : this.pluginManager.getAISDKTools();
     // When tools are available the model may need multiple steps to resolve
     // all tool calls before producing a final text answer.
     const stopWhen = tools
       ? stepCountIs(options?.maxToolSteps ?? 5)
       : undefined;
-    const providerOptions = reasoningProviderOptions(
-      this.data.provider,
-      this.data.model,
-      options?.reasoning ?? this.data.reasoning,
-    );
+    const plan = this.planRoute(options);
+
+    type Attempt = { text: string; parsed?: T; usage?: AISDKUsage; toolCalls?: Array<{ toolName: string }>; retryCount: number };
+    let toolsRan = false;
+    const runOn = async (target: ModelTarget, withRetries: boolean): Promise<Attempt> => {
+      const model = await this.providerFactory.getModel(target.provider, target.model);
+      const system = resolveSystemPromptAndRag(this.data.instructions, ragContexts, options?.buildSystemPrompt, target);
+      const providerOptions = reasoningProviderOptions(target.provider, target.model, target.reasoning);
+      const trackedTools = trackToolRuns(tools, () => { toolsRan = true; });
+      const base = {
+        model,
+        messages: beforeResult.messages,
+        maxRetries: 0,
+        ...(providerOptions && { providerOptions }),
+        ...(trackedTools && { tools: trackedTools }),
+        ...(stopWhen && { stopWhen }),
+      };
+      const call = <R>(fn: () => Promise<R>) =>
+        withRetries ? callLlmWithRetry(fn) : fn().then((value) => ({ value, retryCount: 0 }));
+
+      if (options?.output?.mode === 'object') {
+        // Structured object output using AI SDK's experimental_output
+        // This validates the response against the schema and provides type safety
+        const outputSchema = options.output.schema;
+        const { value: result, retryCount } = await call(() => generateText({
+          ...base,
+          system,
+          experimental_output: Output.object({ schema: outputSchema }),
+        }));
+        return {
+          text: JSON.stringify(result.experimental_output),
+          parsed: result.experimental_output as T,
+          usage: result.usage as AISDKUsage | undefined,
+          toolCalls: result.toolCalls as Array<{ toolName: string }> | undefined,
+          retryCount,
+        };
+      }
+      if (options?.output?.mode === 'json') {
+        // Flexible JSON mode - add instruction and parse manually
+        const jsonSystemPrompt = system + '\n\n---\nOUTPUT FORMAT: You MUST respond with valid JSON only. No markdown code blocks, no explanations, no additional text - just raw JSON that can be parsed directly.';
+        const { value: result, retryCount } = await call(() => generateText({ ...base, system: jsonSystemPrompt }));
+        let parsedJson: T | undefined;
+        try {
+          parsedJson = JSON.parse(result.text) as T;
+        } catch {
+          // LLM didn't return valid JSON - leave parsed undefined
+        }
+        return {
+          text: result.text,
+          parsed: parsedJson,
+          usage: result.usage as AISDKUsage | undefined,
+          toolCalls: result.toolCalls as Array<{ toolName: string }> | undefined,
+          retryCount,
+        };
+      }
+      // Default: plain text mode
+      const { value: result, retryCount } = await call(() => generateText({ ...base, system }));
+      return {
+        text: result.text,
+        usage: result.usage as AISDKUsage | undefined,
+        toolCalls: result.toolCalls as Array<{ toolName: string }> | undefined,
+        retryCount,
+      };
+    };
 
     let text: string;
     let parsed: T | undefined;
     let usage: AISDKUsage | undefined;
     let toolCalls: Array<{ toolName: string }> | undefined;
     let retryCount = 0;
+    let servedBy: ServedBy;
 
     const llmStart = Date.now();
     try {
-      if (options?.output?.mode === 'object') {
-        // Structured object output using AI SDK's experimental_output
-        // This validates the response against the schema and provides type safety
-        const outputSchema = options.output.schema;
-        const { value: result, retryCount: rc } = await callLlmWithRetry(() => generateText({
-          model,
-          messages: beforeResult.messages,
-          system: systemPrompt,
-          maxRetries: 0,
-          ...(providerOptions && { providerOptions }),
-          ...(tools && { tools }),
-          ...(stopWhen && { stopWhen }),
-          experimental_output: Output.object({ schema: outputSchema }),
-        }));
-        retryCount = rc;
-        text = JSON.stringify(result.experimental_output);
-        parsed = result.experimental_output as T;
-        usage = result.usage as AISDKUsage | undefined;
-        toolCalls = result.toolCalls as Array<{ toolName: string }> | undefined;
-      } else if (options?.output?.mode === 'json') {
-        // Flexible JSON mode - add instruction and parse manually
-        const jsonSystemPrompt = systemPrompt + '\n\n---\nOUTPUT FORMAT: You MUST respond with valid JSON only. No markdown code blocks, no explanations, no additional text - just raw JSON that can be parsed directly.';
-        const { value: result, retryCount: rc } = await callLlmWithRetry(() => generateText({
-          model,
-          messages: beforeResult.messages,
-          system: jsonSystemPrompt,
-          maxRetries: 0,
-          ...(providerOptions && { providerOptions }),
-          ...(tools && { tools }),
-          ...(stopWhen && { stopWhen }),
-        }));
-        retryCount = rc;
-        text = result.text;
-        usage = result.usage as AISDKUsage | undefined;
-        toolCalls = result.toolCalls as Array<{ toolName: string }> | undefined;
-        try {
-          parsed = JSON.parse(text) as T;
-        } catch {
-          // LLM didn't return valid JSON - leave parsed undefined
-        }
+      let attempt: Attempt;
+      if (plan.fallback && plan.skipPrimary) {
+        attempt = await runOn(plan.fallback, true);
+        servedBy = this.servedByFallback(plan, 'circuit_open');
       } else {
-        // Default: plain text mode
-        const { value: result, retryCount: rc } = await callLlmWithRetry(() => generateText({
-          model,
-          messages: beforeResult.messages,
-          system: systemPrompt,
-          maxRetries: 0,
-          ...(providerOptions && { providerOptions }),
-          ...(tools && { tools }),
-          ...(stopWhen && { stopWhen }),
-        }));
-        retryCount = rc;
-        text = result.text;
-        usage = result.usage as AISDKUsage | undefined;
-        toolCalls = result.toolCalls as Array<{ toolName: string }> | undefined;
+        try {
+          // With a fallback, the primary gets no retries: moving to the other provider is faster.
+          attempt = await runOn(plan.primary, !plan.fallback);
+          servedBy = { provider: plan.primary.provider, model: plan.primary.model };
+          if (plan.fallback) modelCircuitBreaker.recordSuccess(plan.primary);
+        } catch (error) {
+          if (plan.fallback) modelCircuitBreaker.recordFailure(plan.primary);
+          // Never replay a turn whose tools already ran on the primary.
+          if (!plan.fallback || toolsRan) throw error;
+          attempt = await runOn(plan.fallback, true);
+          servedBy = this.servedByFallback(plan, 'error', error);
+        }
       }
+      ({ text, parsed, usage, toolCalls, retryCount } = attempt);
     } catch (error) {
       const { errorType, isRetryable } = classifyLlmError(error);
       await this.pluginManager.trackError({
@@ -487,6 +556,7 @@ export class Agent {
     };
     const warningReasons: string[] = [];
     if (retryCount > 0) warningReasons.push('retry');
+    if (servedBy.fallback) warningReasons.push('fallback');
     if (afterResult.response.trim().length === 0) warningReasons.push('empty_response');
     await this.pluginManager.trackResponseExtended({
       agentId: this.data.id,
@@ -500,8 +570,8 @@ export class Agent {
       tokens,
       rag,
       success: true,
-      model: this.data.model,
-      provider: this.data.provider,
+      model: servedBy.model,
+      provider: servedBy.provider,
       ...(warningReasons.length > 0 && { warningReasons }),
     });
 
@@ -514,6 +584,7 @@ export class Agent {
         ragMetadata,
         latency,
         tokenUsage: tokens,
+        servedBy,
         ...(toolCalls && toolCalls.length > 0 && {
           toolCalls: toolCalls.map((tc) => ({ toolName: tc.toolName })),
         }),
@@ -573,65 +644,102 @@ export class Agent {
         ragMetadata = allMetadata;
       }
 
-      const systemPrompt = resolveSystemPromptAndRag(
-        this.data.instructions,
-        ragContexts,
-        options?.buildSystemPrompt,
-      );
-
       // Stream response
-      const model = await this.providerFactory.getModel(this.data.provider, this.data.model);
       const tools = options?.disableTools ? undefined : this.pluginManager.getAISDKTools();
       const stopWhen = tools
         ? stepCountIs(options?.maxToolSteps ?? 5)
         : undefined;
-      const providerOptions = reasoningProviderOptions(
-        this.data.provider,
-        this.data.model,
-        options?.reasoning ?? this.data.reasoning,
-      );
+      const plan = this.planRoute(options);
+      const firstTokenTimeoutMs = options?.firstTokenTimeoutMs ?? DEFAULT_FIRST_TOKEN_TIMEOUT_MS;
+
+      type Opened = {
+        streamResult: ReturnType<typeof streamText>;
+        iterator: AsyncIterator<any>;
+        first: IteratorResult<any>;
+        retryCount: number;
+      };
+
+      /**
+       * Starts a stream on `target` and reads until the first COMMITTING part (text or a tool call):
+       * until then nothing reached the visitor and no tool ran, so the attempt can still be abandoned.
+       * `timeoutMs` bounds that wait (primary with a fallback only); `retries` re-opens on retryable
+       * errors, as before this change.
+       */
+      const open = async (target: ModelTarget, timeoutMs: number | undefined, retries: number): Promise<Opened> => {
+        const model = await this.providerFactory.getModel(target.provider, target.model);
+        const system = resolveSystemPromptAndRag(this.data.instructions, ragContexts, options?.buildSystemPrompt, target);
+        const providerOptions = reasoningProviderOptions(target.provider, target.model, target.reasoning);
+        for (let retryCount = 0; ; retryCount++) {
+          const abort = new AbortController();
+          const streamResult = streamText({
+            model,
+            messages: beforeResult.messages,
+            system,
+            maxRetries: 0,
+            abortSignal: abort.signal,
+            ...(providerOptions && { providerOptions }),
+            ...(tools && { tools }),
+            ...(stopWhen && { stopWhen }),
+          });
+          const iterator = streamResult.fullStream[Symbol.asyncIterator]();
+          const timer = timeoutMs !== undefined ? deadline(timeoutMs) : undefined;
+          try {
+            for (;;) {
+              const r = await (timer ? Promise.race([iterator.next(), timer.promise]) : iterator.next());
+              if (r.done) return { streamResult, iterator, first: r, retryCount };
+              if (r.value.type === 'error') throw r.value.error;
+              if (isCommittingPart(r.value)) return { streamResult, iterator, first: r, retryCount };
+              // start / start-step / reasoning parts: alive, but nothing committed yet — keep waiting.
+            }
+          } catch (error) {
+            abort.abort();
+            if (error instanceof FirstTokenTimeoutError) throw error; // slow ≠ retry the same model
+            const { isRetryable } = classifyLlmError(error);
+            if (!isRetryable || retryCount >= retries) throw error;
+            await new Promise((resolve) => setTimeout(resolve, Math.min(500 * 2 ** retryCount, 4000)));
+          } finally {
+            timer?.cancel();
+          }
+        }
+      };
 
       const llmStart = Date.now();
-      const startStream = () =>
-        streamText({
-          model,
-          messages: beforeResult.messages,
-          system: systemPrompt,
-          maxRetries: 0,
-          ...(providerOptions && { providerOptions }),
-          ...(tools && { tools }),
-          ...(stopWhen && { stopWhen }),
-        });
-
-      // Retry only while no chunk has been emitted yet, so an established stream
-      // is never restarted mid-flight. Once the first token lands we commit.
-      let streamResult = startStream();
-      let iterator = streamResult.textStream[Symbol.asyncIterator]();
-      let firstResult: IteratorResult<string>;
-      let retryCount = 0;
-      for (;;) {
+      let opened: Opened;
+      let servedBy: ServedBy;
+      if (plan.fallback && plan.skipPrimary) {
+        opened = await open(plan.fallback, undefined, LLM_MAX_RETRIES);
+        servedBy = this.servedByFallback(plan, 'circuit_open');
+      } else {
         try {
-          firstResult = await iterator.next();
-          break;
+          opened = await open(plan.primary, plan.fallback ? firstTokenTimeoutMs : undefined, plan.fallback ? 0 : LLM_MAX_RETRIES);
+          servedBy = { provider: plan.primary.provider, model: plan.primary.model };
         } catch (error) {
-          const { isRetryable } = classifyLlmError(error);
-          if (!isRetryable || retryCount >= LLM_MAX_RETRIES) throw error;
-          retryCount += 1;
-          await new Promise((resolve) =>
-            setTimeout(resolve, Math.min(500 * 2 ** (retryCount - 1), 4000)),
-          );
-          streamResult = startStream();
-          iterator = streamResult.textStream[Symbol.asyncIterator]();
+          if (!plan.fallback) throw error;
+          modelCircuitBreaker.recordFailure(plan.primary);
+          const reason: FallbackReason = error instanceof FirstTokenTimeoutError ? 'first_token_timeout' : 'error';
+          opened = await open(plan.fallback, undefined, LLM_MAX_RETRIES);
+          servedBy = this.servedByFallback(plan, reason, error);
         }
       }
+      const { streamResult, iterator, first, retryCount } = opened;
 
+      // Committed: from here a failure is reported, never replayed on another model.
       let fullText = '';
       let firstChunkAt: number | undefined;
-      for (let result = firstResult; !result.done; result = await iterator.next()) {
-        if (firstChunkAt === undefined) firstChunkAt = Date.now();
-        fullText += result.value;
-        onChunk(result.value);
+      try {
+        for (let result = first; !result.done; result = await iterator.next()) {
+          const part = result.value;
+          if (part.type === 'error') throw part.error;
+          if (part.type !== 'text-delta' || !part.text) continue;
+          if (firstChunkAt === undefined) firstChunkAt = Date.now();
+          fullText += part.text;
+          onChunk(part.text);
+        }
+      } catch (error) {
+        if (plan.fallback && !servedBy.fallback) modelCircuitBreaker.recordFailure(plan.primary);
+        throw error;
       }
+      if (plan.fallback && !servedBy.fallback) modelCircuitBreaker.recordSuccess(plan.primary);
 
       // Token usage resolves after the stream is fully consumed
       let usage: AISDKUsage | undefined;
@@ -661,6 +769,7 @@ export class Agent {
       };
       const warningReasons: string[] = [];
       if (retryCount > 0) warningReasons.push('retry');
+      if (servedBy.fallback) warningReasons.push('fallback');
       if (afterResult.response.trim().length === 0) warningReasons.push('empty_response');
       await this.pluginManager.trackResponseExtended({
         agentId: this.data.id,
@@ -678,8 +787,8 @@ export class Agent {
         tokens,
         rag,
         success: true,
-        model: this.data.model,
-        provider: this.data.provider,
+        model: servedBy.model,
+        provider: servedBy.provider,
         ...(warningReasons.length > 0 && { warningReasons }),
       });
 
@@ -690,6 +799,7 @@ export class Agent {
           ragMetadata,
           latency,
           tokenUsage: tokens,
+          servedBy,
         });
       }
     } catch (error) {
@@ -711,6 +821,34 @@ export class Agent {
         throw error;
       }
     }
+  }
+
+  /**
+   * Primary + optional fallback for one turn. The breaker is only consulted when there is a fallback
+   * to go to; a fallback identical to the primary is ignored.
+   */
+  private planRoute(options?: AgentGenerateOptions): RoutePlan {
+    const primary: ModelTarget = {
+      provider: this.data.provider,
+      model: this.data.model,
+      reasoning: options?.reasoning ?? this.data.reasoning,
+    };
+    const configured = options?.fallback === null ? undefined : (options?.fallback ?? this.data.fallback);
+    const fallback = configured && targetKey(configured) !== targetKey(primary) ? configured : undefined;
+    return { primary, fallback, skipPrimary: !!fallback && !modelCircuitBreaker.allow(primary) };
+  }
+
+  private servedByFallback(plan: RoutePlan, reason: FallbackReason, error?: unknown): ServedBy {
+    const fb = plan.fallback!;
+    return {
+      provider: fb.provider,
+      model: fb.model,
+      fallback: {
+        from: { provider: plan.primary.provider, model: plan.primary.model },
+        reason,
+        ...(error !== undefined && { error: errorMessage(error).slice(0, 300) }),
+      },
+    };
   }
 
   /**
