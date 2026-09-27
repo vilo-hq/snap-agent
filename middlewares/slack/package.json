@@ -1,6 +1,6 @@
 {
   "name": "@snap-agent/middleware-slack",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Slack notifications middleware for SnapAgent SDK - Send alerts and notifications to Slack channels via webhooks.",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
@@ -38,7 +38,7 @@
     "access": "public"
   },
   "peerDependencies": {
-    "@snap-agent/core": "^0.1.0"
+    "@snap-agent/core": "^0.1.0 || ^0.2.0 || ^0.3.0"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

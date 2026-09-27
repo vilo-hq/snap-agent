@@ -1,6 +1,6 @@
 {
   "name": "@snap-agent/middleware-webhooks",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Generic webhooks middleware for SnapAgent SDK - Send agent events to any HTTP endpoint with retries and custom payloads.",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
@@ -38,7 +38,7 @@
     "access": "public"
   },
   "peerDependencies": {
-    "@snap-agent/core": "^0.1.0"
+    "@snap-agent/core": "^0.1.0 || ^0.2.0 || ^0.3.0"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
