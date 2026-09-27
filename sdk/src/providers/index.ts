@@ -4,7 +4,7 @@ import { ProviderType, ProviderConfig, ProviderNotFoundError } from '../types';
 
 /**
  * Provider factory for creating language model instances
- * Supports OpenAI, Anthropic, Google, and Hugging Face providers via Vercel AI SDK
+ * Supports OpenAI, Anthropic, Google, Groq, and Hugging Face providers via Vercel AI SDK
  */
 export class ProviderFactory {
   private config: ProviderConfig;
@@ -97,6 +97,25 @@ export class ProviderFactory {
       }
 
 
+      case 'groq': {
+        if (!this.config.groq?.apiKey) {
+          throw new ProviderNotFoundError('Groq API key not configured');
+        }
+        // Dynamic import for edge runtime compatibility
+        try {
+          const { createGroq } = await import('@ai-sdk/groq');
+          const groq = createGroq({
+            apiKey: this.config.groq.apiKey,
+          });
+          model = groq(modelName);
+        } catch (error) {
+          throw new ProviderNotFoundError(
+            'Groq provider not installed. Run: npm install @ai-sdk/groq'
+          );
+        }
+        break;
+      }
+
       default:
         throw new ProviderNotFoundError(`Unknown provider: ${provider}`);
     }
@@ -118,6 +137,8 @@ export class ProviderFactory {
         return !!this.config.google?.apiKey;
       case 'huggingface':
         return !!this.config.huggingface?.apiKey;
+      case 'groq':
+        return !!this.config.groq?.apiKey;
       default:
         return false;
     }
@@ -133,6 +154,7 @@ export class ProviderFactory {
     if (this.config.anthropic?.apiKey) providers.push('anthropic');
     if (this.config.google?.apiKey) providers.push('google');
     if (this.config.huggingface?.apiKey) providers.push('huggingface');
+    if (this.config.groq?.apiKey) providers.push('groq');
 
     return providers;
   }
@@ -231,6 +253,12 @@ export const Models = {
     GEMINI_3_1_PRO_PREVIEW: 'gemini-3.1-pro-preview',
     GEMINI_3_FLASH_PREVIEW: 'gemini-3-flash-preview',
   },
+  Groq: {
+    // OpenAI's open-weight models on Groq LPUs (ids carry the `openai/` prefix Groq uses).
+    // console.groq.com/docs/models, checked September 2026: ~500 and ~1000 tok/s.
+    GPT_OSS_120B: 'openai/gpt-oss-120b',
+    GPT_OSS_20B: 'openai/gpt-oss-20b',
+  },
   HuggingFace: {
     META_LLAMA_70B: 'meta-llama/Llama-3.3-70B-Instruct',
     META_LLAMA_8B:  'meta-llama/Meta-Llama-3.1-8B-Instruct',
@@ -292,6 +320,8 @@ export const ModelDisplayNames: Record<string, string> = {
   'gemini-3.1-flash-lite': 'Gemini 3.1 Flash-Lite',
   'gemini-3.1-pro-preview': 'Gemini 3.1 Pro (preview)',
   'gemini-3-flash-preview': 'Gemini 3 Flash (preview)',
+  'openai/gpt-oss-120b': 'GPT-OSS 120B (Groq)',
+  'openai/gpt-oss-20b': 'GPT-OSS 20B (Groq)',
   'meta-llama/Llama-3.3-70B-Instruct': 'Llama 3.3 70B Instruct',
   'meta-llama/Meta-Llama-3.1-8B-Instruct': 'Llama 3.1 8B Instruct',
   'mistralai/Mistral-Nemo-Instruct-2407': 'Mistral Nemo Instruct',

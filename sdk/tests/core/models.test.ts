@@ -33,3 +33,15 @@ describe('Models catalog', () => {
     expect(Models.Google.GEMINI_3_8_FLASH).toBe('gemini-3.8-flash');
   });
 });
+
+describe('ProviderFactory: groq', () => {
+  it('is configured only with a key and builds a model', async () => {
+    const { ProviderFactory } = await import('../../src/providers');
+    expect(new ProviderFactory({}).isProviderConfigured('groq')).toBe(false);
+    const factory = new ProviderFactory({ groq: { apiKey: 'test-key' } });
+    expect(factory.isProviderConfigured('groq')).toBe(true);
+    expect(factory.getConfiguredProviders()).toContain('groq');
+    const model = await factory.getModel('groq', Models.Groq.GPT_OSS_120B);
+    expect((model as { modelId?: string }).modelId).toBe('openai/gpt-oss-120b');
+  });
+});

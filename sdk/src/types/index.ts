@@ -5,7 +5,7 @@ import type { Plugin, StoredPluginConfig } from './plugins';
 // Provider Types
 // ============================================================================
 
-export type ProviderType = 'openai' | 'anthropic' | 'google' | 'huggingface';
+export type ProviderType = 'openai' | 'anthropic' | 'google' | 'huggingface' | 'groq';
 
 export interface ProviderConfig {
   openai?: {
@@ -19,7 +19,11 @@ export interface ProviderConfig {
   };
   huggingface?: { 
     apiKey: string 
-  }
+  };
+  /** Groq serves open-weight models (e.g. gpt-oss) on LPUs at several hundred tokens/s. */
+  groq?: {
+    apiKey: string;
+  };
 }
 
 // ============================================================================

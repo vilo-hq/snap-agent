@@ -54,6 +54,16 @@ describe('reasoningProviderOptions', () => {
     });
   });
 
+  describe('groq', () => {
+    it('maps gpt-oss, whose floor is low', () => {
+      expect(r('groq', 'openai/gpt-oss-120b', 'off')).toEqual({ groq: { reasoningEffort: 'low' } });
+      expect(r('groq', 'openai/gpt-oss-20b', 'high')).toEqual({ groq: { reasoningEffort: 'high' } });
+    });
+    it('sends nothing for other Groq models', () => {
+      expect(r('groq', 'some-other-model', 'off')).toBeUndefined();
+    });
+  });
+
   it('ignores providers without a reasoning control', () => {
     expect(r('huggingface', 'meta-llama/Llama-3.3-70B-Instruct', 'off')).toBeUndefined();
   });
