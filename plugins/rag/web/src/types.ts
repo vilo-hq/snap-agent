@@ -687,6 +687,8 @@ export interface CrawlResult extends WebIngestResult {
 export interface WebIngestResult {
   success: boolean;
   indexed: number;
+  /** Feed syncs only: documents skipped because nothing changed (no delete, no re-embedding). */
+  unchanged?: number;
   failed: number;
   errors?: Array<{ id: string; error: string }>;
   metadata?: Record<string, any>;

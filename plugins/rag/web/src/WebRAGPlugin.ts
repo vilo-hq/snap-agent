@@ -125,6 +125,32 @@ function computeContentHash(content: string): string {
   return createHash('sha256').update(normalizeForHash(content)).digest('hex');
 }
 
+/**
+ * Metadata keys that change on every run without the document changing. Left out of the document
+ * hash so a re-fetch of the same item is recognised as unchanged; refreshed in place on a skip.
+ */
+const VOLATILE_DOC_METADATA_KEYS = new Set(['ingestionId', 'fetchedAt', 'onCrawlProgress']);
+
+function stableJson(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, v]) => v !== undefined && typeof v !== 'function')
+    .sort(([a], [b]) => a.localeCompare(b));
+  return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableJson(v)}`).join(',')}}`;
+}
+
+/**
+ * Hash of everything that would make a stored document stale: normalized content, its stable
+ * metadata, the embedding model and the chunk layout version. Stored on every chunk as `docHash`.
+ */
+export function computeDocHash(content: string, metadata: Record<string, unknown> | undefined, embeddingModel: string | undefined): string {
+  const stable = Object.fromEntries(Object.entries(metadata ?? {}).filter(([k]) => !VOLATILE_DOC_METADATA_KEYS.has(k)));
+  return createHash('sha256')
+    .update(`${HASH_ALGO_VERSION}\u0000${embeddingModel ?? ''}\u0000${normalizeForHash(content)}\u0000${stableJson(stable)}`)
+    .digest('hex');
+}
+
 // ============================================================================
 // Web RAG Plugin
 // ============================================================================
@@ -1119,11 +1145,19 @@ export class WebRAGPlugin implements RAGPlugin {
    */
   async ingest(
     documents: RAGDocument[],
-    options?: IngestOptions
-  ): Promise<IngestResult> {
+    options?: IngestOptions,
+    /**
+     * Internal. `skipUnchanged`: a document whose stored chunks all carry the same `docHash` (and the
+     * same chunk count) is neither deleted nor re-embedded — only its run-specific metadata
+     * (`ingestionId`, `fetchedAt`) is refreshed. Used by feed syncs (`ingestFromUrl`), which re-send
+     * every item on every run; crawls already skip unchanged pages through the ledger.
+     */
+    internal?: { skipUnchanged?: boolean },
+  ): Promise<IngestResult & { unchanged?: number }> {
     const collection = await this.getCollection();
 
     let indexed = 0;
+    let unchanged = 0;
     const errors: Array<{ id: string; error: string }> = [];
     const agentId = options?.agentId || 'shared';
 
@@ -1131,6 +1165,47 @@ export class WebRAGPlugin implements RAGPlugin {
       ?.metadata?.onCrawlProgress as CrawlProgressCallback | undefined;
     const indexingTotal = documents.length;
     const chunkPlan = documents.map((doc) => this.chunkContent(doc.content));
+    const docHashes = documents.map((doc) => computeDocHash(doc.content, doc.metadata as Record<string, unknown>, this.config.embeddingModel));
+
+    // Existing chunk hashes for these documents, in ONE query (keyed by sourceId + document id).
+    const storedHashes = new Map<string, { hashes: Set<string | undefined>; count: number }>();
+    if (internal?.skipUnchanged && documents.length > 0) {
+      const ids = documents.map((d) => d.id);
+      const sourceIds = [...new Set(documents.map((d) => {
+        const sid = d.metadata?.sourceId;
+        return typeof sid === 'string' && sid ? sid : null;
+      }))];
+      try {
+        const rows = await collection
+          .find(
+            {
+              tenantId: this.config.tenantId,
+              agentId,
+              'metadata.sourceId': { $in: sourceIds },
+              $or: [{ documentId: { $in: ids } }, { id: { $in: ids } }],
+            },
+            { projection: { id: 1, documentId: 1, docHash: 1, 'metadata.sourceId': 1 } },
+          )
+          .toArray();
+        for (const r of rows as any[]) {
+          const key = `${r.metadata?.sourceId ?? ''}|${r.documentId ?? r.id}`;
+          const entry = storedHashes.get(key) ?? { hashes: new Set(), count: 0 };
+          entry.hashes.add(r.docHash);
+          entry.count += 1;
+          storedHashes.set(key, entry);
+        }
+      } catch {
+        storedHashes.clear(); // lookup failed ⇒ re-ingest everything, as before
+      }
+    }
+    const isUnchanged = (docIndex: number): boolean => {
+      if (!internal?.skipUnchanged) return false;
+      const doc = documents[docIndex]!;
+      const sid = doc.metadata?.sourceId;
+      const entry = storedHashes.get(`${typeof sid === 'string' && sid ? sid : ''}|${doc.id}`);
+      return Boolean(entry && entry.count === chunkPlan[docIndex]!.length
+        && entry.hashes.size === 1 && entry.hashes.has(docHashes[docIndex]));
+    };
     const chunksTotal = chunkPlan.reduce((sum, chunks) => sum + chunks.length, 0);
     let chunksProcessed = 0;
 
@@ -1148,6 +1223,7 @@ export class WebRAGPlugin implements RAGPlugin {
     }
 
     const failedDocIds = new Set<string>();
+    const processedDocsSkipped = new Set<number>();
     const markFailed = (docId: string, error: unknown) => {
       if (failedDocIds.has(docId)) return;
       failedDocIds.add(docId);
@@ -1187,6 +1263,25 @@ export class WebRAGPlugin implements RAGPlugin {
         // the delete takes out the chunks of another source that shares the document id.
         'metadata.sourceId': typeof sourceId === 'string' && sourceId ? sourceId : null,
       };
+
+      // Unchanged since the last run: keep the stored chunks and embeddings, refresh only what the
+      // host keys on the current run.
+      if (isUnchanged(docIndex)) {
+        const refresh: Record<string, unknown> = { updatedAt: new Date() };
+        for (const key of VOLATILE_DOC_METADATA_KEYS) {
+          const v = (doc.metadata as Record<string, unknown> | undefined)?.[key];
+          if (v !== undefined && typeof v !== 'function') refresh[`metadata.${key}`] = v;
+        }
+        try {
+          await collection.updateMany({ ...scope, $or: [{ documentId: doc.id }, { id: doc.id }] }, { $set: refresh });
+          unchanged += 1;
+          processedDocsSkipped.add(docIndex);
+          continue;
+        } catch {
+          // fall through to a full re-ingest of this document
+        }
+      }
+
       try {
         await collection.deleteMany({
           ...scope,
@@ -1201,6 +1296,7 @@ export class WebRAGPlugin implements RAGPlugin {
         const chunkId = isChunked ? `chunk-${doc.id}-${i}` : doc.id;
         const storedDoc: any = {
           id: chunkId,
+          docHash: docHashes[docIndex],
           content: chunks[i],
           metadata: {
             type: doc.metadata?.type || 'content',
@@ -1273,7 +1369,7 @@ export class WebRAGPlugin implements RAGPlugin {
           {
             phase: 'indexing',
             urlsScheduled: indexingTotal,
-            pagesProcessed: processedDocs.size,
+            pagesProcessed: processedDocs.size + processedDocsSkipped.size,
             chunksTotal,
             chunksProcessed,
           },
@@ -1286,6 +1382,7 @@ export class WebRAGPlugin implements RAGPlugin {
     return {
       success: errors.length === 0,
       indexed,
+      ...(internal?.skipUnchanged ? { unchanged } : {}),
       failed: errors.length,
       errors: errors.length > 0 ? errors : undefined,
       metadata: {
@@ -1519,7 +1616,8 @@ export class WebRAGPlugin implements RAGPlugin {
         },
       }));
 
-      const ingestResult = await this.ingest(documents, options);
+      // A feed re-sends every item on every sync; unchanged ones are skipped (see `ingest`).
+      const ingestResult = await this.ingest(documents, options, { skipUnchanged: true });
 
       return {
         ...ingestResult,

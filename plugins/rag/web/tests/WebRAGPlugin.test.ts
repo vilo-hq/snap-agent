@@ -505,6 +505,102 @@ describe('WebRAGPlugin', () => {
     });
   });
 
+  describe('feed sync skips unchanged items', () => {
+    const coll = () => mongoLedger.mockClient.db().collection() as any;
+    const feed = (items: Array<{ id: string; content: string }>) => ({
+      ok: true,
+      json: async () => items,
+    });
+    const source = {
+      url: 'https://api.example.com/feed',
+      type: 'json' as const,
+      transform: { fieldMapping: { id: 'id', content: 'content' } },
+      metadata: { sourceId: 'src-1', ingestionId: 'run-1' },
+    };
+    /** The chunks persisted by the last bulkWrite calls, as stored rows. */
+    const storedRows = () =>
+      mongoLedger.mockBulkWrite.mock.calls.flatMap(([ops]: any[]) =>
+        ops.map((op: any) => ({ id: op.updateOne.update.$set.id, documentId: op.updateOne.update.$set.documentId, docHash: op.updateOne.update.$set.docHash, metadata: { sourceId: 'src-1' } })),
+      );
+
+    beforeEach(() => {
+      mockFetch.mockReset();
+      mongoLedger.mockBulkWrite.mockClear();
+      mongoLedger.mockDeleteMany.mockClear();
+      mongoLedger.mockUpdateMany.mockClear();
+      openaiMock.create.mockClear();
+    });
+
+    it('re-embeds nothing when the feed did not change, and refreshes the run id', async () => {
+      const items = [{ id: 'a', content: 'Alpha project' }, { id: 'b', content: 'Beta project' }];
+      mockFetch.mockResolvedValueOnce(feed(items));
+      coll().find.mockReturnValueOnce({ toArray: async () => [] });
+      const first = await plugin.ingestFromUrl(source);
+      expect(first.indexed).toBe(2);
+      expect(first.unchanged).toBe(0);
+      const rows = storedRows();
+      expect(rows.every((r: any) => typeof r.docHash === 'string' && r.docHash.length === 64)).toBe(true);
+
+      mongoLedger.mockBulkWrite.mockClear();
+      mongoLedger.mockDeleteMany.mockClear();
+      openaiMock.create.mockClear();
+      mockFetch.mockResolvedValueOnce(feed(items));
+      coll().find.mockReturnValueOnce({ toArray: async () => rows });
+      const second = await plugin.ingestFromUrl({ ...source, metadata: { sourceId: 'src-1', ingestionId: 'run-2' } });
+
+      expect(second.unchanged).toBe(2);
+      expect(second.indexed).toBe(2);
+      expect(openaiMock.create).not.toHaveBeenCalled();
+      expect(mongoLedger.mockDeleteMany).not.toHaveBeenCalled();
+      expect(mongoLedger.mockBulkWrite).not.toHaveBeenCalled();
+      const refresh = mongoLedger.mockUpdateMany.mock.calls.map(([, update]: any[]) => update.$set['metadata.ingestionId']);
+      expect(refresh).toEqual(['run-2', 'run-2']);
+    });
+
+    it('re-embeds only the item whose content changed', async () => {
+      mockFetch.mockResolvedValueOnce(feed([{ id: 'a', content: 'Alpha project' }, { id: 'b', content: 'Beta project' }]));
+      coll().find.mockReturnValueOnce({ toArray: async () => [] });
+      await plugin.ingestFromUrl(source);
+      const rows = storedRows();
+
+      mongoLedger.mockBulkWrite.mockClear();
+      openaiMock.create.mockClear();
+      mockFetch.mockResolvedValueOnce(feed([{ id: 'a', content: 'Alpha project' }, { id: 'b', content: 'Beta project, now finished' }]));
+      coll().find.mockReturnValueOnce({ toArray: async () => rows });
+      const second = await plugin.ingestFromUrl(source);
+
+      expect(second.unchanged).toBe(1);
+      const written = storedRows().map((r: any) => r.id);
+      expect(written).toEqual(['b']);
+      const embedded = openaiMock.create.mock.calls.flatMap(([p]: any[]) => (Array.isArray(p.input) ? p.input : [p.input]));
+      expect(embedded).toEqual(['Beta project, now finished']);
+    });
+
+    it('re-embeds items stored before hashes existed', async () => {
+      mockFetch.mockResolvedValueOnce(feed([{ id: 'a', content: 'Alpha project' }]));
+      coll().find.mockReturnValueOnce({ toArray: async () => [{ id: 'a', metadata: { sourceId: 'src-1' } }] });
+      const result = await plugin.ingestFromUrl(source);
+      expect(result.unchanged).toBe(0);
+      expect(openaiMock.create).toHaveBeenCalled();
+    });
+
+    it('falls back to a full re-ingest when the hash lookup fails', async () => {
+      mockFetch.mockResolvedValueOnce(feed([{ id: 'a', content: 'Alpha project' }]));
+      coll().find.mockReturnValueOnce({ toArray: async () => { throw new Error('db down'); } });
+      const result = await plugin.ingestFromUrl(source);
+      expect(result.success).toBe(true);
+      expect(result.unchanged).toBe(0);
+      expect(openaiMock.create).toHaveBeenCalled();
+    });
+
+    it('leaves plain ingest() untouched: no lookup, no unchanged count', async () => {
+      const findCalls = coll().find.mock.calls.length;
+      const result = await plugin.ingest([{ id: 'x', content: 'Plain document', metadata: { type: 'content' } }]);
+      expect(coll().find.mock.calls.length).toBe(findCalls);
+      expect((result as any).unchanged).toBeUndefined();
+    });
+  });
+
   describe('ingestFromUrl', () => {
     beforeEach(() => {
       mockFetch.mockReset();
