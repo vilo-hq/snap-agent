@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { extractProductMetadata } from './productMetadata';
 import { runPageExtractors } from './pageExtractors';
 import { resolvePageDisplayMetadata } from './pageCardMetadata';
+import { stripTrackingParams } from './trackingParams';
 
 const DEFAULT_CONTENT_SELECTOR =
   'article, main, [role="main"], #content, #primary, #main, .content, .post-content, ' +
@@ -51,6 +52,17 @@ export interface HtmlPageExtractOptions {
 
 export interface HtmlPageExtractResult {
   id: string;
+  /**
+   * The requested URL without tracking parameters or fragment. `metadata.url` and `id` derive from
+   * it, so carousel and campaign links of one page converge on one document.
+   */
+  identityUrl: string;
+  /**
+   * The page's own `rel="canonical"` when it can be trusted (`trustedCanonicalUrl`), else null. Not
+   * applied here: a canonical can be misused (page 2 of a listing pointing at page 1), so whoever
+   * stores the page decides with the content in hand — see `WebRAGPlugin.ingestFromHtml`.
+   */
+  canonicalUrl: string | null;
   metadata: Record<string, unknown>;
   content: string;
   /** True when content meets minExtractedContentLength (default 50). */
@@ -100,11 +112,14 @@ export function bodyTextLengthHint(html: string, options: HtmlPageExtractOptions
  * Unlike ingest, always returns metadata even when content is too short to index.
  */
 export function extractPageFromHtml(
-  url: string,
+  requestedUrl: string,
   html: string,
   options: HtmlPageExtractOptions = {},
 ): HtmlPageExtractResult {
   const $ = cheerio.load(html);
+  const url = requestedIdentityUrl(requestedUrl);
+  // Before stripping noise: the canonical lives in <head>, and stripping may take it.
+  const canonicalUrl = pageCanonicalUrl(requestedUrl, $);
   stripNoiseFromDom($, options);
 
   const h1Title = $('h1').first().text().trim();
@@ -215,11 +230,56 @@ export function extractPageFromHtml(
 
   return {
     id: urlToDocumentId(url),
+    identityUrl: url,
+    canonicalUrl,
     metadata,
     content,
     indexable,
     contentPreview,
   };
+}
+
+/**
+ * The URL a page declares as itself, when it can be trusted.
+ *
+ * `rel="canonical"` is the site's own statement of which URL is the real page, so it covers what no
+ * parameter list can: session ids, sort orders, variant links, http vs https. It is ignored when it
+ * points to another host (syndication) or collapses an inner page onto the homepage — a common
+ * misconfiguration that would fold a whole site into one document.
+ */
+export function trustedCanonicalUrl(requestedUrl: string, href: string | undefined): string | null {
+  if (!href?.trim()) return null;
+  try {
+    const requested = new URL(requestedUrl);
+    const canonical = new URL(href.trim(), requested);
+    if (canonical.protocol !== 'http:' && canonical.protocol !== 'https:') return null;
+    const host = (u: URL) => u.hostname.toLowerCase().replace(/^www\./, '');
+    if (host(canonical) !== host(requested)) return null;
+    const isRoot = (u: URL) => u.pathname === '/' || u.pathname === '';
+    if (isRoot(canonical) && !isRoot(requested)) return null;
+    canonical.hash = '';
+    return canonical.toString();
+  } catch {
+    return null;
+  }
+}
+
+/** A URL without fragment or tracking parameters: the identity a page has before its canonical. */
+export function requestedIdentityUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    u.hash = '';
+    return stripTrackingParams(u.toString());
+  } catch {
+    return url;
+  }
+}
+
+/** The page's trusted `rel="canonical"`, normalized like `requestedIdentityUrl`, or null. */
+export function pageCanonicalUrl(requestedUrl: string, $: cheerio.CheerioAPI): string | null {
+  const href = $('link[rel]').filter((_, el) => /(^|\s)canonical(\s|$)/i.test($(el).attr('rel') ?? '')).first().attr('href');
+  const canonical = trustedCanonicalUrl(requestedUrl, href);
+  return canonical ? requestedIdentityUrl(canonical) : null;
 }
 
 function stripNoiseFromDom($: cheerio.CheerioAPI, options: HtmlPageExtractOptions): void {

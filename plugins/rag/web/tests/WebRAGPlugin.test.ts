@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { WebRAGPlugin } from '../src/WebRAGPlugin';
+import { sourceScopedDocumentId } from '../src/htmlPageExtract';
 
 // Mock MongoDB (findOne / find for crawl ledger)
 const mongoLedger = vi.hoisted(() => {
@@ -2525,6 +2526,79 @@ describe('WebRAGPlugin', () => {
       const second = await plugin.ingestFromHtml([page()], {}, { agentId: 'agent-1' });
       expect(second.pages[0].outcome).toBe('unchanged');
       expect(second.indexed).toBe(0);
+    });
+
+    describe('identity convergence', () => {
+      const clean = 'https://shop.test/productos/pantalon/';
+      const carousel = `${clean}?recommendation_source=alternative-carousel&recommender=manual`;
+      const productHtml = (body = 'z'.repeat(3000)) =>
+        `<html><head><title>Pantalón</title><link rel="canonical" href="${clean}" /></head><body>${body}</body></html>`;
+      // Chunk writes only: the ledger's content-hash stamp shares the mocked collection.
+      const writtenDocIds = () => new Set(mongoLedger.mockBulkWrite.mock.calls.flatMap(([ops]) =>
+        (ops as Array<{ updateOne?: { update?: { $set?: { documentId?: string; id?: string; content?: string } } } }>)
+          .map((op) => op.updateOne?.update?.$set)
+          .filter((set) => set?.content !== undefined)
+          .map((set) => set!.documentId ?? set!.id)));
+
+      it('stores one document for the clean url and its carousel copy, in the same batch', async () => {
+        const result = await plugin.ingestFromHtml(
+          [page({ url: clean, html: productHtml() }), page({ url: carousel, html: productHtml() })],
+          {},
+          { agentId: 'agent-1' },
+        );
+        expect(result.pages.map((p) => p.url)).toEqual([clean, carousel]);
+        expect(result.pages[0].documentId).toBe(result.pages[1].documentId);
+        expect(result.pages[1].outcome).toBe('unchanged');
+        expect(writtenDocIds().size).toBe(1);
+      });
+
+      it('stores a carousel copy under its canonical, with the clean url as metadata.url', async () => {
+        const result = await plugin.ingestFromHtml([page({ url: carousel, html: productHtml() })], {}, { agentId: 'agent-1' });
+        expect(result.pages[0].documentId).toBe(sourceScopedDocumentId('src-1', clean));
+        const stored = mongoLedger.mockBulkWrite.mock.calls[0]![0][0].updateOne.update.$set;
+        expect(stored.metadata.url).toBe(clean);
+      });
+
+      it('drops the copy an earlier version stored under the carousel url', async () => {
+        await plugin.ingestFromHtml([page({ url: carousel, html: productHtml() })], {}, { agentId: 'agent-1' });
+        // The explicit legacy delete (`delete(ids)`, an `$in`), not the per-document overwrite that
+        // ingest runs on the id it is about to write.
+        const legacyId = sourceScopedDocumentId('src-1', carousel);
+        const dropped = mongoLedger.mockDeleteMany.mock.calls.some(([filter]) =>
+          JSON.stringify(filter).includes(`"$in":["${legacyId}"]`));
+        expect(dropped).toBe(true);
+      });
+
+      it('keeps a page apart when its canonical is known to hold different content', async () => {
+        // Page 2 of a listing pointing its canonical at page 1: a misused canonical, not a copy.
+        const pageOne = 'https://shop.test/blog/';
+        const pageTwo = 'https://shop.test/blog/?page=2';
+        mongoLedger.mockFindOne.mockImplementation(async (filter: { urlNormalized?: string }) =>
+          filter.urlNormalized === pageOne ? { contentHash: 'contenido-de-la-pagina-1', hashAlgo: 'sha256-v1', lastStatus: 'indexed' } : null);
+        const html = `<html><head><title>Blog</title><link rel="canonical" href="${pageOne}" /></head><body>${'w'.repeat(3000)}</body></html>`;
+        const result = await plugin.ingestFromHtml([page({ url: pageTwo, html })], {}, { agentId: 'agent-1' });
+        expect(result.pages[0].documentId).toBe(sourceScopedDocumentId('src-1', pageTwo));
+        mongoLedger.mockFindOne.mockResolvedValue(null);
+      });
+
+      it('follows a canonical it has not seen yet', async () => {
+        const html = `<html><head><title>Blog</title><link rel="canonical" href="https://shop.test/blog/" /></head><body>${'w'.repeat(3000)}</body></html>`;
+        const result = await plugin.ingestFromHtml([page({ url: 'https://shop.test/blog/?page=2', html })], {}, { agentId: 'agent-1' });
+        expect(result.pages[0].documentId).toBe(sourceScopedDocumentId('src-1', 'https://shop.test/blog/'));
+      });
+
+      it('does not trust an unchanged ledger row that still points at the legacy document', async () => {
+        const first = await plugin.ingestFromHtml([page({ url: carousel, html: productHtml() })], {}, { agentId: 'agent-1' });
+        mongoLedger.mockBulkWrite.mockClear();
+        mongoLedger.mockFindOne.mockImplementation(async (filter: { urlNormalized?: string }) =>
+          filter.urlNormalized === carousel
+            ? { contentHash: first.pages[0].contentHash, hashAlgo: 'sha256-v1', lastStatus: 'indexed', docId: sourceScopedDocumentId('src-1', carousel) }
+            : null);
+        const second = await plugin.ingestFromHtml([page({ url: carousel, html: productHtml() })], {}, { agentId: 'agent-1' });
+        expect(second.pages[0].documentId).toBe(sourceScopedDocumentId('src-1', clean));
+        expect(mongoLedger.mockBulkWrite).toHaveBeenCalled();
+        mongoLedger.mockFindOne.mockResolvedValue(null);
+      });
     });
 
     it('does not try to extract a page the acquirer could not fetch', async () => {

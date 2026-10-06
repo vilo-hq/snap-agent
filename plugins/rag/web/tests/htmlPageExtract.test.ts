@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { extractPageFromHtml, sourceScopedDocumentId } from '../src/htmlPageExtract';
+import { extractPageFromHtml, sourceScopedDocumentId, trustedCanonicalUrl } from '../src/htmlPageExtract';
+import { stripTrackingParams } from '../src/trackingParams';
 
 const BODY = '<p>' + 'x'.repeat(60) + '</p>';
 
@@ -130,5 +131,38 @@ describe('extractPageFromHtml', () => {
     expect(result.metadata.propertyType).toBeUndefined();
     expect(result.metadata.expenses).toBeUndefined();
     expect(result.content).not.toMatch(/En venta|for sale|ambientes|Expensas/);
+  });
+});
+
+describe('page identity', () => {
+  const carousel = 'https://shop.test/productos/pantalon/?recommendation_source=alternative-carousel&recommender=manual';
+  const page = (head: string) => `<html><head><title>Pantalón</title>${head}</head><body>${BODY}</body></html>`;
+
+  it('strips tracking params from the stored url and the id, keeping the ones that change content', () => {
+    const extracted = extractPageFromHtml(carousel, page(''));
+    expect(extracted.identityUrl).toBe('https://shop.test/productos/pantalon/');
+    expect(extracted.metadata.url).toBe('https://shop.test/productos/pantalon/');
+    expect(extracted.id).toBe(extractPageFromHtml('https://shop.test/productos/pantalon/', page('')).id);
+    expect(stripTrackingParams('https://x.test/list?p=2&utm_source=a&variant=7')).toBe('https://x.test/list?p=2&variant=7');
+  });
+
+  it('reports a trusted canonical without applying it', () => {
+    const extracted = extractPageFromHtml(carousel, page('<link rel="canonical" href="/productos/pantalon/" />'));
+    expect(extracted.canonicalUrl).toBe('https://shop.test/productos/pantalon/');
+    expect(extracted.identityUrl).toBe('https://shop.test/productos/pantalon/');
+  });
+
+  it('reads rel lists and survives the noise stripping', () => {
+    const extracted = extractPageFromHtml('https://shop.test/p/1?variant=9', page('<link rel="alternate canonical" href="https://www.shop.test/p/1" />'));
+    expect(extracted.canonicalUrl).toBe('https://www.shop.test/p/1');
+  });
+
+  it('only trusts a canonical on the same site that does not collapse an inner page onto the homepage', () => {
+    expect(trustedCanonicalUrl('https://shop.test/p/1', 'https://www.shop.test/p/1')).toBe('https://www.shop.test/p/1');
+    expect(trustedCanonicalUrl('https://shop.test/p/1', 'https://syndicator.test/p/1')).toBeNull();
+    expect(trustedCanonicalUrl('https://shop.test/p/1', 'https://shop.test/')).toBeNull();
+    expect(trustedCanonicalUrl('https://shop.test/', 'https://shop.test/')).toBe('https://shop.test/');
+    expect(trustedCanonicalUrl('https://shop.test/p/1', 'javascript:alert(1)')).toBeNull();
+    expect(trustedCanonicalUrl('https://shop.test/p/1', '   ')).toBeNull();
   });
 });

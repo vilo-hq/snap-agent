@@ -12,6 +12,7 @@
  * - Type/recency boosts: Prioritize certain content types or fresh content
  */
 
+import { stripTrackingParams } from './trackingParams';
 import type {
   RAGPlugin,
   RAGContext,
@@ -550,6 +551,21 @@ export class WebRAGPlugin implements RAGPlugin {
       pages.map((page) => page.url),
       { stripQueryParams: config.stripQueryParams },
     );
+    // Identity convergence. The ledger and every result stay keyed by the REQUESTED url (the caller's
+    // cursor protocol checks it position by position); only the stored document is keyed by the
+    // page's identity, so several requested urls of one page write ONE document:
+    //   - the url without tracking params (`extracted.identityUrl`), always;
+    //   - the page's own `rel="canonical"` (`extracted.canonicalUrl`) when the content agrees: the
+    //     canonical's known content hash (queued in this batch, or in its ledger row) must match.
+    //     A canonical not seen yet is trusted; if it later turns out to differ, its own page
+    //     overwrites the document and this url splits off on the next run. That keeps a misused
+    //     canonical (page 2 of a listing pointing at page 1) from folding two different pages.
+    // Measured on a Tiendanube store: 205 of 206 pages reached through carousel urls had the same
+    // extracted content as their canonical; the one that differed is a different page.
+    const queuedDocIds = new Map<string, string>(); // docId -> contentHash
+    // Documents a previous version stored this page under (legacy id -> the id it lives under now):
+    // deleted once the page is safely stored under its identity.
+    const legacyDocTargets = new Map<string, string>();
 
     for (const [index, page] of pages.entries()) {
       const mapping = mappings[index]!;
@@ -599,21 +615,67 @@ export class WebRAGPlugin implements RAGPlugin {
       }
 
       const newHash = computeContentHash(extracted.content);
-      const doc: RAGDocument = {
-        id: sourceScopedDocumentId(page.sourceId, page.url),
-        content: extracted.content,
-        metadata: {
-          ...(extracted.metadata as RAGDocument['metadata']),
-          sourceId: page.sourceId,
-          ingestionId: page.ingestionId,
-        },
-      };
       try {
+        let identityUrl = extracted.identityUrl;
+        if (extracted.canonicalUrl && extracted.canonicalUrl !== identityUrl) {
+          const canonicalDocId = sourceScopedDocumentId(page.sourceId, extracted.canonicalUrl);
+          const canonicalUrlNormalized = this.normalizeLedgerUrl(extracted.canonicalUrl, config.stripQueryParams ?? false);
+          const knownHash = queuedDocIds.get(canonicalDocId)
+            ?? (canonicalUrlNormalized ? (await this.findLedgerEntry(canonicalUrlNormalized, agentId, page.sourceId))?.contentHash : undefined);
+          if (!knownHash || knownHash === newHash) identityUrl = extracted.canonicalUrl;
+        }
+        const docId = sourceScopedDocumentId(page.sourceId, identityUrl);
+        // What earlier versions stored this page under: the raw requested url, or this url without
+        // tracking params when the canonical did not agree on a previous run.
+        const legacyDocIds = [page.url, extracted.identityUrl]
+          .map((url) => sourceScopedDocumentId(page.sourceId, url))
+          .filter((id, i, all) => id !== docId && all.indexOf(id) === i);
+        const doc: RAGDocument = {
+          id: docId,
+          content: extracted.content,
+          metadata: {
+            ...(extracted.metadata as RAGDocument['metadata']),
+            url: identityUrl,
+            sourceId: page.sourceId,
+            ingestionId: page.ingestionId,
+          },
+        };
         const ledgerEntry = await this.findLedgerEntry(urlNormalized, agentId, page.sourceId);
+        // A ledger row written before identity convergence points at the legacy document: the
+        // content may be unchanged, but it is not stored under its identity yet.
+        const storedUnderIdentity = (ledgerEntry?.docId ?? sourceScopedDocumentId(page.sourceId, page.url)) === docId;
         const isUnchanged =
           ledgerEntry?.contentHash === newHash &&
           ledgerEntry?.hashAlgo === HASH_ALGO_VERSION &&
-          ledgerEntry?.lastStatus === 'indexed';
+          ledgerEntry?.lastStatus === 'indexed' &&
+          storedUnderIdentity;
+        // Another requested url of the same page already queued this document in this batch:
+        // writing it twice would duplicate its chunks.
+        const sameDocQueued = queuedDocIds.has(docId);
+
+        if (sameDocQueued) {
+          // No contentHash: it is stamped only once the queued document has its embedding.
+          await this.upsertLedgerRecord({
+            url: page.url,
+            urlNormalized,
+            agentId,
+            ingestionId: page.ingestionId,
+            sourceId: page.sourceId,
+            status: 'indexed',
+            doc,
+          });
+          for (const legacyId of legacyDocIds) legacyDocTargets.set(legacyId, docId);
+          results.push({
+            url: page.url,
+            urlNormalized,
+            outcome: 'unchanged',
+            documentId: doc.id,
+            contentHash: newHash,
+            cardEligible: Boolean((extracted.metadata as { cardEligible?: boolean }).cardEligible),
+            type: (extracted.metadata as { type?: string }).type,
+          });
+          continue;
+        }
 
         if (isUnchanged) {
           await this.upsertLedgerRecord({
@@ -648,6 +710,8 @@ export class WebRAGPlugin implements RAGPlugin {
           doc,
         });
         documents.push(doc);
+        queuedDocIds.set(docId, newHash);
+        for (const legacyId of legacyDocIds) legacyDocTargets.set(legacyId, docId);
         pendingHashes.set(doc.id, { urlNormalized, sourceId: page.sourceId, contentHash: newHash });
         results.push({
           url: page.url,
@@ -665,15 +729,26 @@ export class WebRAGPlugin implements RAGPlugin {
 
     if (documents.length > 0) {
       try {
-        const ingestResult = await this.ingest(documents, options);
+        // `skipUnchanged`: a requested url seen for the first time may belong to a page whose
+        // document already exists under its identity — same chunks, nothing to re-embed.
+        const ingestResult = await this.ingest(documents, options, { skipUnchanged: true });
         const failedIds = new Set((ingestResult.errors ?? []).map((error) => error.id));
+        const unchangedIds = new Set(ingestResult.unchangedIds ?? []);
         for (const result of results) {
           if (result.documentId && failedIds.has(result.documentId)) {
             result.outcome = 'failed';
             result.error = ingestResult.errors?.find((error) => error.id === result.documentId)?.error;
             result.errorCode = 'embedding_failed';
+          } else if (result.documentId && unchangedIds.has(result.documentId) && (result.outcome === 'added' || result.outcome === 'changed')) {
+            result.outcome = 'unchanged';
           }
         }
+        // The page is stored under its identity now: drop the copy an earlier version stored under
+        // the requested url. Never a document this batch just wrote, and only after its target landed.
+        const legacyToDrop = [...legacyDocTargets.entries()]
+          .filter(([legacyId, targetId]) => !failedIds.has(targetId) && !queuedDocIds.has(legacyId))
+          .map(([legacyId]) => legacyId);
+        if (legacyToDrop.length > 0) await this.delete(legacyToDrop, options);
         const toStamp = [...pendingHashes.entries()]
           .filter(([docId]) => !failedIds.has(docId))
           .map(([, entry]) => entry);
@@ -1153,7 +1228,7 @@ export class WebRAGPlugin implements RAGPlugin {
      * every item on every run; crawls already skip unchanged pages through the ledger.
      */
     internal?: { skipUnchanged?: boolean },
-  ): Promise<IngestResult & { unchanged?: number }> {
+  ): Promise<IngestResult & { unchanged?: number; unchangedIds?: string[] }> {
     const collection = await this.getCollection();
 
     let indexed = 0;
@@ -1224,6 +1299,7 @@ export class WebRAGPlugin implements RAGPlugin {
 
     const failedDocIds = new Set<string>();
     const processedDocsSkipped = new Set<number>();
+    const unchangedIds: string[] = [];
     const markFailed = (docId: string, error: unknown) => {
       if (failedDocIds.has(docId)) return;
       failedDocIds.add(docId);
@@ -1275,6 +1351,7 @@ export class WebRAGPlugin implements RAGPlugin {
         try {
           await collection.updateMany({ ...scope, $or: [{ documentId: doc.id }, { id: doc.id }] }, { $set: refresh });
           unchanged += 1;
+          unchangedIds.push(doc.id);
           processedDocsSkipped.add(docIndex);
           continue;
         } catch {
@@ -1382,7 +1459,7 @@ export class WebRAGPlugin implements RAGPlugin {
     return {
       success: errors.length === 0,
       indexed,
-      ...(internal?.skipUnchanged ? { unchanged } : {}),
+      ...(internal?.skipUnchanged ? { unchanged, unchangedIds } : {}),
       failed: errors.length,
       errors: errors.length > 0 ? errors : undefined,
       metadata: {
@@ -2565,7 +2642,8 @@ export class WebRAGPlugin implements RAGPlugin {
         u.hash = '';
         if (stripQueryParams) u.search = '';
 
-        links.add(u.toString());
+        // The same page linked from a campaign or a store carousel is not a new page to crawl.
+        links.add(stripTrackingParams(u.toString()));
       } catch {
         // ignore invalid URLs
       }
