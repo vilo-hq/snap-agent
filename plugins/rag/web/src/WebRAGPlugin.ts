@@ -925,7 +925,7 @@ export class WebRAGPlugin implements RAGPlugin {
           ...(doc.metadata.currency ? { currency: doc.metadata.currency } : {}),
           ...(doc.metadata.availability ? { availability: doc.metadata.availability } : {}),
           ...(doc.metadata.colors ? { colors: doc.metadata.colors } : {}),
-          ...(doc.metadata.colorImages ? { colorImages: doc.metadata.colorImages } : {}),
+          ...(doc.metadata.images ? { images: doc.metadata.images } : {}),
           // Campos descubiertos por la herramienta de taxonomia del host: datos por entidad
           // (Client, Size, Location) que describen la ficha sin particionar el corpus. Viajan
           // CRUDOS, sin slugificar, porque su destino es una card y el contexto compacto del

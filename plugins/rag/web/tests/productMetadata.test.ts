@@ -198,4 +198,13 @@ describe('page entity: own product vs listing', () => {
     const html = `<html><head><meta property="og:type" content="product"></head><body>${ld(product('A', '', '100'))}${ld(product('B', '', '200'))}</body></html>`;
     expect(extractProductMetadata(html, 'https://shop.test/p/a/').price).toBe(100);
   });
+
+  it('reads a ProductGroup as the page product, with the offer of its first variant', () => {
+    const group = {
+      '@type': 'ProductGroup', name: 'Vestido midi', url: 'https://shop.test/vestidos/vestido-midi/17074',
+      hasVariant: [product('Vestido midi Negro S', 'https://shop.test/vestidos/vestido-midi/17074?pa=1', '14.99', { color: 'Negro' })],
+    };
+    const html = `<html><head>${ld(group)}</head><body>${carousel}</body></html>`;
+    expect(extractProductMetadata(html, 'https://shop.test/vestidos/vestido-midi/17074')).toMatchObject({ price: 14.99, currency: 'ARS' });
+  });
 });

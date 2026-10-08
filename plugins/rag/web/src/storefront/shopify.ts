@@ -1,6 +1,7 @@
 import type { StorefrontExtractor, StorefrontVariants } from './types';
+import type { ProductImage } from '../productImages';
 import {
-  CheerioRoot, COLOR_GROUP_RE, SIZE_GROUP_RE, absoluteUrl, asArray, colorKey, pushVal,
+  CheerioRoot, COLOR_GROUP_RE, SIZE_GROUP_RE, absoluteUrl, asArray, pushVal,
 } from './shared';
 
 /**
@@ -8,8 +9,8 @@ import {
  *
  * Shopify themes embed the full product object as JSON (`[data-product-json]`, a `application/json`
  * script, or `ShopifyAnalytics.meta`). That object carries `options` (Color/Size) and `variants`
- * with a per-variant `featured_image` — so unlike PrestaShop, Shopify exposes a static color→image
- * map, which we capture into `colorImages` to drive right-color card images.
+ * with a per-variant `featured_image` — so unlike PrestaShop, Shopify declares each colour's photo
+ * statically, which we capture into `images` to show the photo of the colour asked for.
  */
 export const shopifyExtractor: StorefrontExtractor = {
   platform: 'shopify',
@@ -25,7 +26,7 @@ export const shopifyExtractor: StorefrontExtractor = {
 
   extract(html: string, $: CheerioRoot, pageUrl?: string): StorefrontVariants {
     const product = findProductJson($, html);
-    if (!product) return { colors: [], sizes: [], colorImages: {} };
+    if (!product) return { colors: [], sizes: [] };
 
     const options = normalizeOptions(product.options);
     const colorIdx = options.findIndex((o) => COLOR_GROUP_RE.test(o.name));
@@ -33,7 +34,7 @@ export const shopifyExtractor: StorefrontExtractor = {
 
     const colors: string[] = [];
     const sizes: string[] = [];
-    const colorImages: Record<string, string> = {};
+    const images: ProductImage[] = [];
 
     // Prefer the declared option value lists (clean, ordered).
     if (colorIdx >= 0) pushVal(colors, options[colorIdx].values);
@@ -47,17 +48,11 @@ export const shopifyExtractor: StorefrontExtractor = {
       const size = sizeIdx >= 0 ? opts[sizeIdx] : undefined;
       if (color) pushVal(colors, color);
       if (size) pushVal(sizes, size);
-      if (color) {
-        const src = variantImage(v);
-        const abs = absoluteUrl(src, pageUrl);
-        if (abs) {
-          const key = colorKey(color);
-          if (key && !colorImages[key]) colorImages[key] = abs;
-        }
-      }
+      const url = absoluteUrl(variantImage(v), pageUrl);
+      if (url) images.push(color ? { url, color } : { url });
     }
 
-    return { colors, sizes, colorImages };
+    return { colors, sizes, images };
   },
 };
 

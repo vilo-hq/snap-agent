@@ -48,7 +48,8 @@ export function schemaTypesOf(node: Record<string, unknown>): string[] {
   }).filter(Boolean);
 }
 
-const isProduct = (node: Record<string, unknown>) => schemaTypesOf(node).includes('product');
+/** `ProductGroup` is a `Product` in schema.org: the page of a product sold in several variants. */
+const isProduct = (node: Record<string, unknown>) => schemaTypesOf(node).some((t) => t === 'product' || t === 'productgroup');
 
 interface PlacedNode { node: Record<string, unknown>; inHead: boolean }
 
@@ -112,7 +113,7 @@ export function readPageEntity($: cheerio.CheerioAPI, pageUrl?: string): PageEnt
     if (entity) {
       const entityTypes = schemaTypesOf(entity as Record<string, unknown>);
       pageType = entityTypes.some((t) => LIST_TYPES.has(t)) ? 'collection' : 'detail';
-      if (entityTypes.includes('product')) ownProduct = entity as Record<string, unknown>;
+      if (isProduct(entity as Record<string, unknown>)) ownProduct = entity as Record<string, unknown>;
       break;
     }
     if (pageType) break;

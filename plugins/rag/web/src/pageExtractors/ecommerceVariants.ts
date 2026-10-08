@@ -2,7 +2,7 @@ import { extractVariants, type VariantMetadata } from '../storefront';
 import type { PageAttributeExtractor, PageExtractionResult } from './types';
 
 /**
- * Built-in ecommerce variant extractor: colors/sizes/per-color images via the storefront pipeline
+ * Built-in ecommerce variant extractor: colors/sizes/product photos via the storefront pipeline
  * (schema.org baseline + PrestaShop/Shopify adapters + scope-aware widget heuristics).
  *
  * `detect()` is permissive (always attempts) because the storefront pipeline already self-gates:
@@ -23,7 +23,7 @@ export const ecommerceVariantsExtractor: PageAttributeExtractor = {
     const metadata: Record<string, unknown> = {};
     if (v.colors.length > 0) metadata.colors = v.colors;
     if (v.sizes.length > 0) metadata.sizes = v.sizes;
-    if (v.colorImages && Object.keys(v.colorImages).length > 0) metadata.colorImages = v.colorImages;
+    if (v.images && v.images.length > 0) metadata.images = v.images;
     if (v.platform) metadata.storefrontPlatform = v.platform;
     return { metadata, contentLines: line ? [line] : [] };
   },

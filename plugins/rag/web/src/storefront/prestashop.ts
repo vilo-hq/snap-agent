@@ -11,9 +11,8 @@ import { extractHeuristics } from './heuristics';
  * (`#add-to-cart-or-refresh`), which is unique per page across PrestaShop themes.
  *
  * NOTE on images: PrestaShop swaps the per-color image via an AJAX call (the swatch carries only a
- * combination id, not an image URL), so a static crawl cannot build a color→image map here.
- * `colorImages` is therefore left empty; fixing the per-color card image for PrestaShop needs a
- * crawler-level variant fetch (tracked as a follow-up), not this extractor.
+ * combination id, not an image URL), so the swatches give no photo. The photos of the colours the
+ * page renders come from its schema.org variants instead (`extractProductImages`).
  */
 export const prestashopExtractor: StorefrontExtractor = {
   platform: 'prestashop',
@@ -30,7 +29,7 @@ export const prestashopExtractor: StorefrontExtractor = {
   extract(_html: string, $: CheerioRoot, _pageUrl?: string): StorefrontVariants {
     const scope = mainProductScope($);
     const { colors, sizes } = extractHeuristics($, scope);
-    return { colors, sizes, colorImages: {} };
+    return { colors, sizes };
   },
 };
 

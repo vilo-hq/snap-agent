@@ -5,6 +5,7 @@ import { extractStructured } from './structured';
 import { extractHeuristics } from './heuristics';
 import { prestashopExtractor } from './prestashop';
 import { shopifyExtractor } from './shopify';
+import { extractProductImages, type ProductImage } from '../productImages';
 
 export type { StorefrontExtractor, StorefrontVariants } from './types';
 
@@ -12,8 +13,8 @@ export type { StorefrontExtractor, StorefrontVariants } from './types';
 export interface VariantMetadata {
   colors: string[];
   sizes: string[];
-  /** Normalized color key → absolute image URL, when the platform exposes per-color images. */
-  colorImages?: Record<string, string>;
+  /** The page's own product photos, each with its colour when the page declares it. */
+  images?: ProductImage[];
   /** Which extractor produced the structured result ('prestashop' | 'shopify' | 'generic'). */
   platform?: string;
 }
@@ -37,7 +38,7 @@ const ADAPTERS: StorefrontExtractor[] = [prestashopExtractor, shopifyExtractor];
 export function extractVariants(html: string, pageUrl?: string): VariantMetadata {
   const $ = cheerio.load(html);
 
-  const base = extractStructured($, html, pageUrl);
+  const base = extractStructured($, html);
 
   let platform: StorefrontExtractor | null = null;
   let bestScore = 0;
@@ -61,10 +62,10 @@ export function extractVariants(html: string, pageUrl?: string): VariantMetadata
 
   const colors = collect([...base.colors, ...dom.colors]);
   const sizes = collect([...base.sizes, ...dom.sizes]);
-  const colorImages = { ...base.colorImages, ...dom.colorImages };
+  const images = extractProductImages($, pageUrl, { colors, declared: dom.images });
 
   const result: VariantMetadata = { colors, sizes };
-  if (Object.keys(colorImages).length > 0) result.colorImages = colorImages;
+  if (images.length > 0) result.images = images;
   // 'generic' when the structured/heuristic baseline produced something but no platform matched.
   if (platformName) result.platform = platformName;
   else if (colors.length > 0 || sizes.length > 0) result.platform = 'generic';

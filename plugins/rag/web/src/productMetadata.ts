@@ -82,7 +82,12 @@ function extractFromJsonLd($: cheerio.CheerioAPI): ProductMetadata {
 }
 
 function fieldsFromProductNode(node: Record<string, unknown>): ProductMetadata {
-  const offer = pickOffer(node);
+  // A `ProductGroup` often carries no offer of its own: each variant does.
+  const variants = Array.isArray(node.hasVariant) ? node.hasVariant : node.hasVariant ? [node.hasVariant] : [];
+  const offer = pickOffer(node) ?? variants
+    .filter((v): v is Record<string, unknown> => Boolean(v) && typeof v === 'object')
+    .map(pickOffer)
+    .find(Boolean) ?? null;
   if (!offer) return {};
   const result: ProductMetadata = {};
   const price = parsePrice(offer.price ?? offer.lowPrice ?? offer.highPrice);

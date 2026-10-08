@@ -60,11 +60,6 @@ export function isSizeLike(value: string): boolean {
   return SIZE_RE.test(strip(v)) || SIZE_RE.test(v);
 }
 
-/** Normalized key for a color value (case/accent-insensitive), used to key colorImages + dedupe. */
-export function colorKey(value: string): string {
-  return strip(value).replace(/\s+/g, ' ');
-}
-
 /** Case/accent-insensitive dedupe that keeps the first original spelling, capped. */
 export function collect(values: Iterable<string>, max = MAX_VALUES): string[] {
   const seen = new Set<string>();

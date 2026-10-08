@@ -142,6 +142,12 @@ describe('WebRAGPlugin', () => {
       expect('pageType' in (await topResultFor({}))).toBe(false);
     });
 
+    it('forwards the product photos with their colours, and no key without them', async () => {
+      const images = [{ url: 'https://shop.test/negro.jpg', color: 'Negro' }, { url: 'https://shop.test/b.jpg' }];
+      expect((await topResultFor({ images })).images).toEqual(images);
+      expect('images' in (await topResultFor({}))).toBe(false);
+    });
+
     it('does not invent the key when the document has no fields', async () => {
       // The pool can bring hundreds of documents per turn: an empty key on each one is dead weight
       // in the payload. Same criterion as `price`, `colors` and the rest of the conditionals.

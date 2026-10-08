@@ -1,15 +1,15 @@
 import type { CheerioRoot } from './shared';
+import type { ProductImage } from '../productImages';
 
 /** Variant data an extractor produces for one product page. */
 export interface StorefrontVariants {
   colors: string[];
   sizes: string[];
   /**
-   * Map of normalized color key (lowercase, accent-stripped) → absolute image URL, when the
-   * storefront exposes per-color images statically. Used downstream to show the right-color card
-   * image. Empty for platforms that resolve variant images via AJAX (e.g. PrestaShop).
+   * Per-variant photos the platform declares outside schema.org (Shopify's product JSON), each with
+   * its variant's colour. Absent for platforms that resolve variant images via AJAX (PrestaShop).
    */
-  colorImages?: Record<string, string>;
+  images?: ProductImage[];
 }
 
 /**

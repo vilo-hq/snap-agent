@@ -10,6 +10,8 @@ export { extractProductMetadata, parsePrice, normalizeCurrency, normalizeAvailab
 export type { ProductMetadata } from './productMetadata';
 export { extractVariants } from './storefront';
 export type { VariantMetadata, StorefrontExtractor, StorefrontVariants } from './storefront';
+export { extractProductImages, MAX_PRODUCT_IMAGES } from './productImages';
+export type { ProductImage } from './productImages';
 export {
   registerPageExtractor,
   unregisterPageExtractor,

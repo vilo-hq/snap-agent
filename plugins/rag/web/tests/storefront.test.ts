@@ -46,10 +46,10 @@ describe('storefront framework — auto-detection + platform tag', () => {
       ]}</script></head><body></body></html>`;
     const v = extractVariants(html, 'https://shop.example.com/p');
     expect(v.colors.map((c) => c.toLowerCase())).toEqual(expect.arrayContaining(['teal', 'navy']));
-    expect(v.colorImages).toMatchObject({
-      teal: 'https://cdn.example.com/teal.jpg',
-      navy: 'https://cdn.example.com/navy.jpg',
-    });
+    expect(v.images).toEqual([
+      { url: 'https://cdn.example.com/teal.jpg', color: 'Teal' },
+      { url: 'https://cdn.example.com/navy.jpg', color: 'Navy' },
+    ]);
   });
 });
 
@@ -84,9 +84,9 @@ describe('PrestaShop adapter', () => {
     expect(v.sizes).toEqual(expect.arrayContaining(['S', 'M']));
   });
 
-  it('leaves colorImages empty for PrestaShop (variant images are AJAX-resolved)', () => {
+  it('takes no photo from the swatches (PrestaShop resolves variant images via AJAX)', () => {
     const v = extractVariants(html);
-    expect(v.colorImages ?? {}).toEqual({});
+    expect(v.images).toBeUndefined();
   });
 });
 
@@ -108,15 +108,15 @@ describe('Shopify adapter', () => {
     expect(v.platform).toBe('shopify');
     expect(v.colors).toEqual(expect.arrayContaining(['Black', 'Olive']));
     expect(v.sizes).toEqual(expect.arrayContaining(['S', 'M']));
-    expect(v.colorImages).toMatchObject({
-      black: 'https://cdn.shopify.com/black.jpg',
-      olive: 'https://cdn.shopify.com/olive.jpg',
-    });
+    expect(v.images).toEqual([
+      { url: 'https://cdn.shopify.com/black.jpg', color: 'Black' },
+      { url: 'https://cdn.shopify.com/olive.jpg', color: 'Olive' },
+    ]);
   });
 
   it('handles protocol-relative variant image URLs', () => {
     const proto = html.replace(/https:\/\/cdn\.shopify\.com/g, '//cdn.shopify.com');
     const v = extractVariants(proto, 'https://shop.example.com/products/tee');
-    expect(v.colorImages?.black).toBe('https://cdn.shopify.com/black.jpg');
+    expect(v.images?.[0]).toEqual({ url: 'https://cdn.shopify.com/black.jpg', color: 'Black' });
   });
 });
