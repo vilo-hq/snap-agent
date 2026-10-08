@@ -187,6 +187,14 @@ export interface CrawlLedgerDocument {
   contentHash?: string;
   /** Version of the content-hash normalization used (`contentHash` is comparable only within a version). */
   hashAlgo?: string;
+  /** `computeDocHash` (text + stable metadata) of the stored document: a metadata change is a change. */
+  docHash?: string;
+  /**
+   * `EXTRACTOR_VERSION` that produced the stored document. A host that skips pages whose raw HTML did
+   * not change must only skip the ones stored by the running version: another version reads the
+   * same HTML differently (price, page type, photos).
+   */
+  extractorVersion?: string;
   title?: string;
   docId?: string;
   httpStatus?: number;

@@ -35,6 +35,7 @@ import {
   urlToDocumentId,
 } from './htmlPageExtract';
 import { runWithConcurrency } from './concurrency';
+import { EXTRACTOR_VERSION } from './version';
 
 import type {
   WebRAGConfig,
@@ -152,6 +153,22 @@ export function computeDocHash(content: string, metadata: Record<string, unknown
     .digest('hex');
 }
 
+/**
+ * Whether the ledger says the stored document is exactly this one: same text AND same metadata.
+ *
+ * WHY: the ledger used to compare the page text alone (`contentHash`), so a page whose text stayed
+ * the same was never stored again, whatever its metadata said. MEASURED in prod (Helena, 2026-10-08):
+ * a re-crawl rewrote 4 of 373 pages; a product kept the price 108900 while its page declared 145200,
+ * and a category kept the price an earlier version took from the first product it listed. Price,
+ * stock, page type and photos live in the metadata.
+ *
+ * A row written before `docHash` existed counts as "maybe changed": the page goes to `ingest`, whose
+ * `skipUnchanged` compares the stored chunks' `docHash` and re-embeds only what really changed.
+ */
+function sameStoredDocument(ledgerEntry: { docHash?: string } | null | undefined, docHash: string): boolean {
+  return ledgerEntry?.docHash === docHash;
+}
+
 // ============================================================================
 // Web RAG Plugin
 // ============================================================================
@@ -160,6 +177,8 @@ export class WebRAGPlugin implements RAGPlugin {
   name = 'web-rag';
   type = 'rag' as const;
   priority: number;
+  /** The extraction this plugin stores pages with (`EXTRACTOR_VERSION`), for the host's crawl skip. */
+  readonly extractorVersion = EXTRACTOR_VERSION;
 
   private config: WebRAGConfig;
   private client: MongoClient | null = null;
@@ -371,6 +390,8 @@ export class WebRAGPlugin implements RAGPlugin {
     contentLength?: number | null;
     /** sha256(normalizeForHash(content)); only written for indexed pages, never nulled otherwise. */
     contentHash?: string;
+    /** `computeDocHash` of the stored document; written together with `contentHash`. */
+    docHash?: string;
   }): Promise<void> {
     const col = await this.getLedgerCollection();
     let domain = '';
@@ -412,6 +433,10 @@ export class WebRAGPlugin implements RAGPlugin {
       if (params.status === 'indexed' && params.contentHash) {
         $set.contentHash = params.contentHash;
         $set.hashAlgo = HASH_ALGO_VERSION;
+        if (params.docHash) {
+          $set.docHash = params.docHash;
+          $set.extractorVersion = EXTRACTOR_VERSION;
+        }
       }
     } else {
       $set.modeUsed = params.diag?.modeUsed;
@@ -438,7 +463,7 @@ export class WebRAGPlugin implements RAGPlugin {
    * embedding exists turns a transient failure into a page that never gets indexed again.
    */
   private async stampContentHashes(
-    entries: Array<{ urlNormalized: string; sourceId?: string; contentHash: string }>,
+    entries: Array<{ urlNormalized: string; sourceId?: string; contentHash: string; docHash: string }>,
     agentId: string,
   ): Promise<void> {
     if (entries.length === 0) return;
@@ -458,6 +483,8 @@ export class WebRAGPlugin implements RAGPlugin {
           update: {
             $set: {
               contentHash: entry.contentHash,
+              docHash: entry.docHash,
+              extractorVersion: EXTRACTOR_VERSION,
               hashAlgo: HASH_ALGO_VERSION,
               updatedAt: new Date(),
             },
@@ -545,7 +572,7 @@ export class WebRAGPlugin implements RAGPlugin {
     const documents: RAGDocument[] = [];
     const pendingHashes = new Map<
       string,
-      { urlNormalized: string; sourceId?: string; contentHash: string }
+      { urlNormalized: string; sourceId?: string; contentHash: string; docHash: string }
     >();
     const mappings = this.normalizeLedgerUrls(
       pages.map((page) => page.url),
@@ -644,10 +671,12 @@ export class WebRAGPlugin implements RAGPlugin {
         // A ledger row written before identity convergence points at the legacy document: the
         // content may be unchanged, but it is not stored under its identity yet.
         const storedUnderIdentity = (ledgerEntry?.docId ?? sourceScopedDocumentId(page.sourceId, page.url)) === docId;
+        const docHash = computeDocHash(doc.content, doc.metadata as Record<string, unknown>, this.config.embeddingModel);
         const isUnchanged =
           ledgerEntry?.contentHash === newHash &&
           ledgerEntry?.hashAlgo === HASH_ALGO_VERSION &&
           ledgerEntry?.lastStatus === 'indexed' &&
+          sameStoredDocument(ledgerEntry, docHash) &&
           storedUnderIdentity;
         // Another requested url of the same page already queued this document in this batch:
         // writing it twice would duplicate its chunks.
@@ -687,6 +716,7 @@ export class WebRAGPlugin implements RAGPlugin {
             status: 'indexed',
             doc,
             contentHash: newHash,
+            docHash,
           });
           results.push({
             url: page.url,
@@ -712,7 +742,7 @@ export class WebRAGPlugin implements RAGPlugin {
         documents.push(doc);
         queuedDocIds.set(docId, newHash);
         for (const legacyId of legacyDocIds) legacyDocTargets.set(legacyId, docId);
-        pendingHashes.set(doc.id, { urlNormalized, sourceId: page.sourceId, contentHash: newHash });
+        pendingHashes.set(doc.id, { urlNormalized, sourceId: page.sourceId, contentHash: newHash, docHash });
         results.push({
           url: page.url,
           urlNormalized,
@@ -2814,7 +2844,7 @@ export class WebRAGPlugin implements RAGPlugin {
     /** docId → ledger row to stamp, only if its embedding finishes successfully. */
     const pendingHashes = new Map<
       string,
-      { urlNormalized: string; sourceId?: string; contentHash: string }
+      { urlNormalized: string; sourceId?: string; contentHash: string; docHash: string }
     >();
     const pageStatuses: CrawlPageStatusEntry[] = [];
     const maxStatuses = ledgerOpts?.maxPageStatuses ?? 500;
@@ -2892,10 +2922,12 @@ export class WebRAGPlugin implements RAGPlugin {
             // Content-hash change detection: only for indexable pages with the ledger enabled.
             if (ledgerOpts && doc && crawlSt === 'indexed') {
               const newHash = computeContentHash(doc.content);
+              const docHash = computeDocHash(doc.content, doc.metadata as Record<string, unknown>, this.config.embeddingModel);
               const isUnchanged =
                 ledgerEntry?.contentHash === newHash &&
                 ledgerEntry?.hashAlgo === HASH_ALGO_VERSION &&
-                ledgerEntry?.lastStatus === 'indexed';
+                ledgerEntry?.lastStatus === 'indexed' &&
+                sameStoredDocument(ledgerEntry, docHash);
 
               if (isUnchanged) {
                 // Refresh the ledger (lastCrawledAt/ingestionId/sourceId) but keep contentHash, and
@@ -2910,6 +2942,7 @@ export class WebRAGPlugin implements RAGPlugin {
                   doc,
                   diag,
                   contentHash: newHash,
+                  docHash,
                 });
                 counters.unchanged++;
                 this.pushPageStatus(pageStatuses, maxStatuses, {
@@ -2966,7 +2999,7 @@ export class WebRAGPlugin implements RAGPlugin {
                 status: crawlSt,
                 error: diag?.errorMessage,
               });
-              return { kind: 'doc' as const, doc, url, urlNormalized, sourceId, pendingHash: newHash };
+              return { kind: 'doc' as const, doc, url, urlNormalized, sourceId, pendingHash: newHash, pendingDocHash: docHash };
             }
 
             // Non-indexable pages (too_small / non_html / blocked / error-without-throw): no hash.
@@ -3043,11 +3076,12 @@ export class WebRAGPlugin implements RAGPlugin {
           }
           if (v && typeof v === 'object' && 'kind' in v && v.kind === 'doc' && v.doc) {
             documents.push(v.doc);
-            if (v.pendingHash && v.urlNormalized) {
+            if (v.pendingHash && v.pendingDocHash && v.urlNormalized) {
               pendingHashes.set(v.doc.id, {
                 urlNormalized: v.urlNormalized,
                 sourceId: v.sourceId,
                 contentHash: v.pendingHash,
+                docHash: v.pendingDocHash,
               });
             }
             urlsCrawled++;
@@ -3075,13 +3109,15 @@ export class WebRAGPlugin implements RAGPlugin {
 
     // Ingest collected documents (embeddings → web_content; progress phase `indexing`)
     if (documents.length > 0) {
+      // `skipUnchanged`: a ledger row from before `docHash` sends its page here even when nothing
+      // changed; the stored chunks' `docHash` tells, so it is not re-embedded for nothing.
       const ingestResult = await this.ingest(documents, {
         ...options,
         metadata: {
           ...((options as { metadata?: Record<string, unknown> } | undefined)?.metadata ?? {}),
           onCrawlProgress: config.metadata?.onCrawlProgress,
         },
-      });
+      }, { skipUnchanged: true });
       indexed = ingestResult.indexed;
       if (ingestResult.errors) {
         errors.push(...ingestResult.errors);

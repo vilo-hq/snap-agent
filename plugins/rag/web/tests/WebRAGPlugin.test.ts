@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { WebRAGPlugin } from '../src/WebRAGPlugin';
 import { sourceScopedDocumentId } from '../src/htmlPageExtract';
+import { EXTRACTOR_VERSION } from '../src/version';
 
 // Mock MongoDB (findOne / find for crawl ledger)
 const mongoLedger = vi.hoisted(() => {
@@ -1969,16 +1970,21 @@ describe('WebRAGPlugin', () => {
       const contentHash = firstHashStamp?.[0].find(
         (op: any) => op.updateOne?.update?.$set?.contentHash,
       )?.updateOne.update.$set.contentHash as string;
+      const docHash = firstHashStamp?.[0].find(
+        (op: any) => op.updateOne?.update?.$set?.contentHash,
+      )?.updateOne.update.$set.docHash as string;
       expect(contentHash).toBeDefined();
+      expect(docHash).toBeDefined();
       expect(openaiMock.create).toHaveBeenCalled();
 
-      // Pass 2 — same content, ledger now has the matching hash → unchanged.
+      // Pass 2 — same content and metadata, ledger now has the matching hashes → unchanged.
       openaiMock.create.mockClear();
       mongoLedger.mockFindOne.mockResolvedValue({
         lastStatus: 'indexed',
         lastCrawledAt: new Date(),
         hashAlgo: 'sha256-v1',
         contentHash,
+        docHash,
       });
 
       const result = await ledgerPlugin.ingestFromUrls(
@@ -2526,18 +2532,91 @@ describe('WebRAGPlugin', () => {
       expect(persistedFetchHash).toBe(false);
     });
 
-    it('does not re-embed when the contentHash did not move', async () => {
+    /** The ledger stamp written after a successful ingest: `contentHash` and `docHash`. */
+    const ledgerStamp = () => mongoLedger.mockBulkWrite.mock.calls
+      .flatMap(([ops]) => ops as Array<{ updateOne?: { update?: { $set?: { contentHash?: string; docHash?: string } } } }>)
+      .map((op) => op.updateOne?.update?.$set)
+      .filter((set) => set?.contentHash)
+      .at(-1)!;
+    const productPage = (price: string) => page({
+      html: `<html><head><title>Túnica Jane</title>
+        <script type="application/ld+json">${JSON.stringify({ '@type': 'Product', name: 'Túnica Jane', offers: { price, priceCurrency: 'ARS' } })}</script>
+        </head><body>${'z'.repeat(3000)}</body></html>`,
+    });
+
+    it('stamps which extractor stored the page, so the host knows when to read it again', async () => {
+      mongoLedger.mockBulkWrite.mockClear();
+      await plugin.ingestFromHtml([page()], {}, { agentId: 'agent-1' });
+      expect(EXTRACTOR_VERSION).toMatch(/^\d+\.\d+\.\d+/);
+      expect(plugin.extractorVersion).toBe(EXTRACTOR_VERSION);
+      expect((ledgerStamp() as { extractorVersion?: string }).extractorVersion).toBe(EXTRACTOR_VERSION);
+    });
+
+    it('does not re-embed when neither the text nor the metadata moved', async () => {
+      mongoLedger.mockBulkWrite.mockClear();
       const first = await plugin.ingestFromHtml([page()], {}, { agentId: 'agent-1' });
-      const hash = first.pages[0].contentHash!;
       mongoLedger.mockFindOne.mockResolvedValue({
-        contentHash: hash,
+        contentHash: first.pages[0].contentHash!,
+        docHash: ledgerStamp().docHash,
         hashAlgo: 'sha256-v1',
         lastStatus: 'indexed',
       });
 
-      const second = await plugin.ingestFromHtml([page()], {}, { agentId: 'agent-1' });
+      const second = await plugin.ingestFromHtml([page({ ingestionId: 'ing-2' })], {}, { agentId: 'agent-1' });
       expect(second.pages[0].outcome).toBe('unchanged');
       expect(second.indexed).toBe(0);
+    });
+
+    // Regresión de Helena (2026-10-08): el precio cambió y el texto no, y la ficha guardada siguió
+    // con el precio viejo porque el ledger sólo comparaba el texto.
+    it('stores again a page whose text stayed but whose metadata changed', async () => {
+      mongoLedger.mockBulkWrite.mockClear();
+      const first = await plugin.ingestFromHtml([productPage('108900')], {}, { agentId: 'agent-1' });
+      expect(first.pages[0].outcome).toBe('added');
+      mongoLedger.mockFindOne.mockResolvedValue({
+        contentHash: first.pages[0].contentHash!,
+        docHash: ledgerStamp().docHash,
+        hashAlgo: 'sha256-v1',
+        lastStatus: 'indexed',
+      });
+      mongoLedger.mockBulkWrite.mockClear();
+
+      const second = await plugin.ingestFromHtml([productPage('145200')], {}, { agentId: 'agent-1' });
+      expect(second.pages[0].contentHash).toBe(first.pages[0].contentHash);
+      expect(second.pages[0].outcome).toBe('changed');
+      expect(second.indexed).toBe(1);
+      const prices = mongoLedger.mockBulkWrite.mock.calls
+        .flatMap(([ops]) => ops as Array<{ updateOne?: { update?: { $set?: { content?: string; metadata?: { price?: number } } } } }>)
+        .map((op) => op.updateOne?.update?.$set)
+        .filter((set) => set?.content !== undefined)
+        .map((set) => set!.metadata?.price);
+      expect(prices.length).toBeGreaterThan(0);
+      expect(new Set(prices)).toEqual(new Set([145200]));
+    });
+
+    it('does not re-embed a page whose ledger row predates docHash when its chunks already match', async () => {
+      mongoLedger.mockBulkWrite.mockClear();
+      const first = await plugin.ingestFromHtml([page()], {}, { agentId: 'agent-1' });
+      const docId = first.pages[0].documentId!;
+      const { docHash } = ledgerStamp();
+      const chunks = mongoLedger.mockBulkWrite.mock.calls
+        .flatMap(([ops]) => ops as Array<{ updateOne?: { update?: { $set?: { content?: string; docHash?: string } } } }>)
+        .map((op) => op.updateOne?.update?.$set)
+        .filter((set) => set?.content !== undefined);
+      expect(chunks.every((chunk) => chunk!.docHash === docHash)).toBe(true);
+      // A row written by an earlier version: the text hash only.
+      mongoLedger.mockFindOne.mockResolvedValue({ contentHash: first.pages[0].contentHash!, hashAlgo: 'sha256-v1', lastStatus: 'indexed' });
+      const collection = mongoLedger.mockClient.db().collection();
+      (collection.find as any).mockReturnValueOnce({
+        toArray: async () => chunks.map((_, i) => ({ id: `${docId}_chunk_${i}`, documentId: docId, docHash, metadata: { sourceId: 'src-1' } })),
+      });
+      openaiMock.create.mockClear();
+      mongoLedger.mockBulkWrite.mockClear();
+
+      const second = await plugin.ingestFromHtml([page({ ingestionId: 'ing-2' })], {}, { agentId: 'agent-1' });
+      expect(second.pages[0].outcome).toBe('unchanged');
+      expect(openaiMock.create).not.toHaveBeenCalled();
+      expect(ledgerStamp().docHash).toBe(docHash);
     });
 
     describe('identity convergence', () => {

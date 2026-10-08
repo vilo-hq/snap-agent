@@ -1,4 +1,5 @@
 export { WebRAGPlugin } from './WebRAGPlugin';
+export { EXTRACTOR_VERSION } from './version';
 export {
   extractPageFromHtml,
   bodyTextLengthHint,
