@@ -136,6 +136,12 @@ describe('WebRAGPlugin', () => {
       expect(result.fields).toEqual(fields);
     });
 
+    it('forwards the page type: the host stamp when present, else what the page declares', async () => {
+      expect((await topResultFor({ observations: { pageType: 'collection' } })).pageType).toBe('collection');
+      expect((await topResultFor({ pageType: 'detail', observations: { pageType: 'collection' } })).pageType).toBe('detail');
+      expect('pageType' in (await topResultFor({}))).toBe(false);
+    });
+
     it('does not invent the key when the document has no fields', async () => {
       // The pool can bring hundreds of documents per turn: an empty key on each one is dead weight
       // in the payload. Same criterion as `price`, `colors` and the rest of the conditionals.

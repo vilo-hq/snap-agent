@@ -1,4 +1,5 @@
 import * as cheerio from 'cheerio';
+import { readPageEntity } from './pageEntity';
 
 export interface ProductMetadata {
   price?: number;
@@ -9,11 +10,17 @@ export interface ProductMetadata {
 /**
  * Extract structured product fields from HTML (JSON-LD, Open Graph, microdata).
  * Per-field priority: JSON-LD → Open Graph → microdata.
+ *
+ * Only the page's OWN product counts (see `readPageEntity`). A listing returns nothing: every price
+ * on it belongs to a listed item, and taking the first one made a category page look like a product.
+ * When the page does not say which product is its own, the first one is still used, as before.
  */
-export function extractProductMetadata(html: string): ProductMetadata {
+export function extractProductMetadata(html: string, pageUrl?: string): ProductMetadata {
   const $ = cheerio.load(html);
+  const page = readPageEntity($, pageUrl);
+  if (page.pageType === 'collection') return {};
 
-  const fromJsonLd = extractFromJsonLd($);
+  const fromJsonLd = page.ownProduct ? fieldsFromProductNode(page.ownProduct) : extractFromJsonLd($);
   const fromOg = extractFromOpenGraph($);
   const fromMicrodata = extractFromMicrodata($);
 
@@ -71,6 +78,19 @@ function extractFromJsonLd($: cheerio.CheerioAPI): ProductMetadata {
     }
   });
 
+  return result;
+}
+
+function fieldsFromProductNode(node: Record<string, unknown>): ProductMetadata {
+  const offer = pickOffer(node);
+  if (!offer) return {};
+  const result: ProductMetadata = {};
+  const price = parsePrice(offer.price ?? offer.lowPrice ?? offer.highPrice);
+  if (price != null) result.price = price;
+  const currency = normalizeCurrency(offer.priceCurrency);
+  if (currency) result.currency = currency;
+  const availability = normalizeAvailability(offer.availability);
+  if (availability) result.availability = availability;
   return result;
 }
 

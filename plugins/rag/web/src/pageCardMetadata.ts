@@ -1,3 +1,4 @@
+import { readPageEntity, type DeclaredPageType } from './pageEntity';
 import * as cheerio from 'cheerio';
 
 /**
@@ -41,6 +42,8 @@ export interface PageObservations {
   ogType?: string;
   /** Path segments, lowercased, empties dropped: `/our-work/projects/x` → [our-work, projects, x] */
   pathSegments: string[];
+  /** Detail page or listing, as the page declares it in schema.org (`readPageEntity`). */
+  pageType?: DeclaredPageType;
   signals: PageSignals;
 }
 
@@ -204,6 +207,7 @@ export function resolvePageDisplayMetadata(
     schemaTypes: html ? extractSchemaTypes(html) : [],
     ogType: $ ? $('meta[property="og:type"]').attr('content')?.toLowerCase() || undefined : undefined,
     pathSegments: extractPathSegments(input.url),
+    ...(() => { const pageType = $ ? readPageEntity($, input.url).pageType : undefined; return pageType ? { pageType } : {}; })(),
     signals: {
       hasPrice: input.hasPriceSignal === true,
       hasPublishDate: $

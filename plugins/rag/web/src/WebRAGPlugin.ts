@@ -920,6 +920,8 @@ export class WebRAGPlugin implements RAGPlugin {
           displayDescription: doc.metadata.displayDescription,
           displayImageUrl: doc.metadata.displayImageUrl,
           ...(doc.metadata.price != null ? { price: doc.metadata.price } : {}),
+          // Detail page or listing: the host's own stamp when it has one, else what the page declares.
+          ...((doc.metadata.pageType ?? doc.metadata.observations?.pageType) ? { pageType: doc.metadata.pageType ?? doc.metadata.observations?.pageType } : {}),
           ...(doc.metadata.currency ? { currency: doc.metadata.currency } : {}),
           ...(doc.metadata.availability ? { availability: doc.metadata.availability } : {}),
           ...(doc.metadata.colors ? { colors: doc.metadata.colors } : {}),

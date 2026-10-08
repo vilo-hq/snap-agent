@@ -142,7 +142,7 @@ export function extractPageFromHtml(
     { html, url },
     options.extractVariantMetadata === false ? { disable: ['ecommerce-variants'] } : {},
   );
-  const productMeta = extractProductMetadata(html);
+  const productMeta = extractProductMetadata(html, url);
   const extraLines = [...extracted.contentLines].filter(Boolean);
   const content =
     extraLines.length > 0 ? `${baseContent}\n\n${extraLines.join('\n\n')}` : baseContent;

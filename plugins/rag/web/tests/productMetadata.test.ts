@@ -163,3 +163,39 @@ describe('productMetadata', () => {
     });
   });
 });
+
+/**
+ * The page's OWN product, not the first one on the page. Shapes from a Tiendanube store
+ * (2026-10-08): a product page names its product as `WebPage.mainEntity` and carries more products
+ * in a carousel; a category page carries one product per listed item and declares none as its own.
+ */
+describe('page entity: own product vs listing', () => {
+  const ld = (json: unknown) => `<script type="application/ld+json">${JSON.stringify(json)}</script>`;
+  const product = (name: string, url: string, price: string, extra: Record<string, unknown> = {}) => ({
+    '@context': 'https://schema.org/', '@type': 'Product', name, ...extra,
+    offers: { '@type': 'Offer', url, price, priceCurrency: 'ARS', availability: 'https://schema.org/InStock' },
+  });
+  const carousel = [1, 2, 3].map((i) => ld(product(`Otro ${i}`, `https://shop.test/productos/otro-${i}/`, `${i}0000`, {
+    mainEntityOfPage: { '@type': 'WebPage', '@id': `https://shop.test/productos/otro-${i}/` },
+  }))).join('');
+
+  it('takes the price of the product the page declares as its main entity', () => {
+    const html = `<html><head>${ld({ '@type': 'WebPage', mainEntity: product('Remera', 'https://shop.test/productos/remera/', '38900') })}</head><body>${carousel}</body></html>`;
+    expect(extractProductMetadata(html, 'https://shop.test/productos/remera/').price).toBe(38900);
+  });
+
+  it('finds its own product by URL even when a carousel product comes first', () => {
+    const html = `<html><head></head><body>${carousel}${ld(product('Remera', 'https://shop.test/productos/remera/', '38900'))}</body></html>`;
+    expect(extractProductMetadata(html, 'https://shop.test/productos/remera/').price).toBe(38900);
+  });
+
+  it('gives a listing no price of its own', () => {
+    const html = `<html><head>${ld({ '@type': 'WebPage', breadcrumb: { '@type': 'BreadcrumbList', itemListElement: [] } })}</head><body>${carousel}</body></html>`;
+    expect(extractProductMetadata(html, 'https://shop.test/clasicos/camisas/')).toEqual({});
+  });
+
+  it('keeps the first product when a product page does not say which one is its own', () => {
+    const html = `<html><head><meta property="og:type" content="product"></head><body>${ld(product('A', '', '100'))}${ld(product('B', '', '200'))}</body></html>`;
+    expect(extractProductMetadata(html, 'https://shop.test/p/a/').price).toBe(100);
+  });
+});

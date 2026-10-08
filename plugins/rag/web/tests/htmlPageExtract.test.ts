@@ -166,3 +166,22 @@ describe('page identity', () => {
     expect(trustedCanonicalUrl('https://shop.test/p/1', '   ')).toBeNull();
   });
 });
+
+describe('observations.pageType', () => {
+  const ld = (json: unknown) => `<script type="application/ld+json">${JSON.stringify(json)}</script>`;
+  const listed = [1, 2].map((i) => ld({ '@type': 'Product', name: `P${i}`, offers: { '@type': 'Offer', url: `https://shop.test/p/${i}/`, price: '10' } })).join('');
+  it('marks a listing and leaves its price out', () => {
+    const extracted = extractPageFromHtml('https://shop.test/coleccion/', `<html><head><title>Colección</title></head><body>${BODY}${listed}</body></html>`);
+    expect((extracted.metadata.observations as { pageType?: string }).pageType).toBe('collection');
+    expect(extracted.metadata.price).toBeUndefined();
+  });
+  it('marks the page of a declared entity as a detail page', () => {
+    const extracted = extractPageFromHtml('https://shop.test/p/1/', `<html><head><title>P1</title>${ld({ '@type': 'WebPage', mainEntity: { '@type': 'Product', name: 'P1', offers: { '@type': 'Offer', price: '10', priceCurrency: 'ARS' } } })}</head><body>${BODY}${listed}</body></html>`);
+    expect((extracted.metadata.observations as { pageType?: string }).pageType).toBe('detail');
+    expect(extracted.metadata.price).toBe(10);
+  });
+  it('says nothing about a page that declares nothing', () => {
+    const extracted = extractPageFromHtml('https://shop.test/about/', `<html><head><title>About</title></head><body>${BODY}</body></html>`);
+    expect((extracted.metadata.observations as { pageType?: string }).pageType).toBeUndefined();
+  });
+});
