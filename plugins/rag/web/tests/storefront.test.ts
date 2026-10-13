@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { extractVariants } from '../src/storefront';
+import {
+  tiendanubePage, sizeFirstTheme, colorFirstTheme, singleGroupTheme, labelWithValueTheme, noOptionsTheme,
+} from './fixtures/tiendanube';
 
 describe('storefront framework — auto-detection + platform tag', () => {
   it('tags generic when no platform is detected but variants exist', () => {
@@ -118,5 +121,61 @@ describe('Shopify adapter', () => {
     const proto = html.replace(/https:\/\/cdn\.shopify\.com/g, '//cdn.shopify.com');
     const v = extractVariants(proto, 'https://shop.example.com/products/tee');
     expect(v.images?.[0]).toEqual({ url: 'https://cdn.shopify.com/black.jpg', color: 'Black' });
+  });
+});
+
+describe('Tiendanube adapter', () => {
+  const url = 'https://tienda.example.com/productos/demo/';
+
+  it('reads sizes and the colour of the main product when the theme puts size first', () => {
+    const v = extractVariants(tiendanubePage(sizeFirstTheme), url);
+    expect(v.platform).toBe('tiendanube');
+    expect(v.sizes).toEqual(['XS', 'S', 'M', 'L', 'XL', 'XXL']);
+    expect(v.colors).toEqual(['Chocolate']);
+    expect(v.variantRoles).toEqual({ Talle: 'size', Color: 'color' });
+    expect(v.variants).toHaveLength(6);
+    expect(v.variants?.every((x) => x.available)).toBe(true);
+    expect(v.variants?.[2]).toEqual({ options: { Talle: 'M', Color: 'Chocolate' }, available: true });
+  });
+
+  it('takes roles from the group label, not the position, and leaves quick-shops out', () => {
+    const v = extractVariants(tiendanubePage(colorFirstTheme), url);
+    expect(v.colors).toEqual(['Celeste']);
+    expect(v.sizes).toEqual(['S/M', 'L/XL']);
+    expect(v.variantRoles).toEqual({ Color: 'color', Talle: 'size' });
+  });
+
+  it('marks a sold-out size as unavailable but still offers it', () => {
+    const v = extractVariants(tiendanubePage(singleGroupTheme), url);
+    expect(v.sizes).toEqual(['S', 'M']);
+    expect(v.variants).toEqual([
+      { options: { Talle: 'S' }, available: true },
+      { options: { Talle: 'M' }, available: false },
+    ]);
+  });
+
+  it('cuts the label at the colon and ignores the quick-shops of other products', () => {
+    const v = extractVariants(tiendanubePage(labelWithValueTheme), url);
+    expect(v.variantRoles).toEqual({ Talla: 'size' });
+    expect(v.sizes).toEqual(['36', '38', '40', '42', '44', '46']);
+    expect(v.variants?.filter((x) => !x.available).map((x) => x.options.Talla)).toEqual(['38', '40', '44', '46']);
+    expect(v.colors).toEqual([]);
+  });
+
+  it('emits nothing for a product without options', () => {
+    const v = extractVariants(tiendanubePage(noOptionsTheme), url);
+    expect(v.platform).toBe('tiendanube');
+    expect(v.colors).toEqual([]);
+    expect(v.sizes).toEqual([]);
+    expect(v.variants).toBeUndefined();
+    expect(v.variantRoles).toBeUndefined();
+  });
+
+  it('keeps the gallery photos and declares none of the variant photos', () => {
+    const v = extractVariants(tiendanubePage(sizeFirstTheme), url);
+    expect(v.images).toEqual(Array.from({ length: 8 }, (_, i) => ({
+      url: `https://acdn-us.mitiendanube.com/stores/000/001/products/demo-${i + 1}-1024-1024.jpg`,
+      color: 'Chocolate',
+    })));
   });
 });
