@@ -12,6 +12,8 @@ export type { ProductMetadata } from './productMetadata';
 export { extractVariants } from './storefront';
 export type { VariantMetadata, StorefrontExtractor, StorefrontVariants } from './storefront';
 export { extractProductImages, MAX_PRODUCT_IMAGES } from './productImages';
+export { readBreadcrumbs } from './breadcrumbs';
+export type { BreadcrumbItem } from './breadcrumbs';
 export type { ProductImage } from './productImages';
 export {
   registerPageExtractor,

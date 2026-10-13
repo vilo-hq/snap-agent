@@ -1,4 +1,5 @@
 import { readPageEntity, type DeclaredPageType } from './pageEntity';
+import { readBreadcrumbs, type BreadcrumbItem } from './breadcrumbs';
 import * as cheerio from 'cheerio';
 
 /**
@@ -44,6 +45,11 @@ export interface PageObservations {
   pathSegments: string[];
   /** Detail page or listing, as the page declares it in schema.org (`readPageEntity`). */
   pageType?: DeclaredPageType;
+  /**
+   * The sections the page sits in, from its own breadcrumb (`readBreadcrumbs`): home and the page
+   * itself left out. Absent when the page shows no trail.
+   */
+  breadcrumbs?: BreadcrumbItem[];
   signals: PageSignals;
 }
 
@@ -208,6 +214,7 @@ export function resolvePageDisplayMetadata(
     ogType: $ ? $('meta[property="og:type"]').attr('content')?.toLowerCase() || undefined : undefined,
     pathSegments: extractPathSegments(input.url),
     ...(() => { const pageType = $ ? readPageEntity($, input.url).pageType : undefined; return pageType ? { pageType } : {}; })(),
+    ...(() => { const breadcrumbs = $ ? readBreadcrumbs($, input.url) : []; return breadcrumbs.length ? { breadcrumbs } : {}; })(),
     signals: {
       hasPrice: input.hasPriceSignal === true,
       hasPublishDate: $
