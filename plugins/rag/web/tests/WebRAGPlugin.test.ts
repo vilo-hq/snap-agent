@@ -160,6 +160,35 @@ describe('WebRAGPlugin', () => {
       const result = await topResultFor({ fields: { Size: ['226,454 sf'] } });
       expect((result.fields as Record<string, string[]>).Size).toEqual(['226,454 sf']);
     });
+
+    const variantMeta = {
+      sizes: ['S', 'M'],
+      variants: [{ options: { Talle: 'S' }, available: true }, { options: { Talle: 'M' }, available: false }],
+      variantRoles: { Talle: 'size' },
+      variantsTruncated: true,
+    };
+
+    it('forwards sizes and variants with their roles and cut, and no keys without them', async () => {
+      const result = await topResultFor(variantMeta);
+      expect(result.sizes).toEqual(variantMeta.sizes);
+      expect(result.variants).toEqual(variantMeta.variants);
+      expect(result.variantRoles).toEqual(variantMeta.variantRoles);
+      expect(result.variantsTruncated).toBe(true);
+      const bare = await topResultFor({});
+      for (const key of ['sizes', 'variants', 'variantRoles', 'variantsTruncated']) expect(key in bare).toBe(false);
+    });
+
+    it('keeps variants out of the model context: no [object Object]', async () => {
+      mongoLedger.mockClient
+        .db()
+        .collection()
+        .aggregate.mockReturnValue({ toArray: vi.fn().mockResolvedValue([docWith(variantMeta)]) });
+      const { content } = await plugin.retrieveContext('query');
+      expect(content).not.toContain('[object Object]');
+      expect(content).not.toContain('Variants:');
+      expect(content).not.toContain('Variant Roles:');
+      expect(content).toContain('**Sizes:** S, M');
+    });
   });
 
   describe('constructor', () => {
