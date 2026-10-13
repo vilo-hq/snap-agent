@@ -188,17 +188,18 @@ describe('Tiendanube adapter — edge cases', () => {
     const v = extractVariants(tiendanubePage({
       variants: [
         { option0: 'S', is_visible: false },
-        { option0: 'M', stock: null, available: true },
-        { option0: 'L', contact: true, price_number: null },
-        { option0: 'XL' },
+        { option0: 'M', stock: null, available: true, price_number: 29990 },
+        // A contact variant can still carry a price_number: it must not become its price.
+        { option0: 'L', contact: true, price_number: 39990 },
+        { option0: 'XL', price_number: 31990 },
       ],
       groups: sizeGroup(['S', 'M', 'L', 'XL']),
     }), url);
     expect(v.sizes).toEqual(['M', 'L', 'XL']);
     expect(v.variants).toEqual([
-      { options: { Talle: 'M' }, available: true },
+      { options: { Talle: 'M' }, available: true, price: 29990 },
       { options: { Talle: 'L' }, available: true, contact: true },
-      { options: { Talle: 'XL' }, available: true },
+      { options: { Talle: 'XL' }, available: true, price: 31990 },
     ]);
   });
 
@@ -232,6 +233,67 @@ describe('Tiendanube adapter — edge cases', () => {
     expect(v.variantRoles).toEqual({ Talle: 'size', Color: 'color' });
     expect(v.sizes).toEqual(['M']);
     expect(v.colors).toEqual(['Rojo']);
+  });
+
+  it('takes the role only from the spec lexicon: «Gama» or «Tonalidad» stay as plain options', () => {
+    const v = extractVariants(tiendanubePage({
+      variants: [{ option0: 'Clásica', option1: 'Pastel', option2: 'M' }],
+      groups: [
+        { id: 0, labels: ['Gama'], values: ['Clásica'] },
+        { id: 1, cls: 'no-colors', labels: ['Tonalidad'], values: ['Pastel'] },
+        { id: 2, labels: ['Tamaño'], values: ['M'] },
+      ],
+    }), url);
+    expect(v.variantRoles).toEqual({ Tamaño: 'size' });
+    expect(v.colors).toEqual([]);
+    expect(v.sizes).toEqual(['M']);
+    expect(v.variants?.[0]?.options).toEqual({ Gama: 'Clásica', Tonalidad: 'Pastel', Tamaño: 'M' });
+  });
+
+  it('S19: the role comes from the first NON-EMPTY label of the group', () => {
+    const v = extractVariants(tiendanubePage({
+      variants: [{ option0: 'M' }],
+      groups: [{ id: 0, labels: ['  ', 'Talle'], values: ['M'] }],
+    }), url);
+    expect(v.variantRoles).toEqual({ Talle: 'size' });
+    expect(v.sizes).toEqual(['M']);
+  });
+
+  it('S20: the schema.org baseline still adds to the adapter on a Tiendanube page', () => {
+    const html = tiendanubePage({
+      variants: [{ option0: 'M', option1: 'Negro' }],
+      groups: [
+        { id: 0, labels: ['Talle'], values: ['M'] },
+        { id: 1, cls: 'js-color-variants-container', labels: ['Color'], values: ['Negro'] },
+      ],
+    }).replace('"sku":"DEMO1"', '"sku":"DEMO1","color":"Rojo"');
+    const v = extractVariants(html, url);
+    expect(v.platform).toBe('tiendanube');
+    expect(v.colors).toEqual(['Rojo', 'Negro']);
+  });
+
+  it('a link to mitiendanube.com alone does not make a page Tiendanube: the generic heuristics still run', () => {
+    const html = `<html><body>
+      <select name="color"><option>Rojo</option><option>Azul</option></select>
+      <select name="talla"><option>S</option><option>M</option></select>
+      <a href="https://www.mitiendanube.com">Creado con Tiendanube</a>
+    </body></html>`;
+    const v = extractVariants(html, url);
+    expect(v.platform).not.toBe('tiendanube');
+    expect(v.sizes).toEqual(['S', 'M']);
+  });
+
+  it('matches the group lexicons by whole word: «Corte» is not a colour (cor), «Color del marco» is', () => {
+    const v = extractVariants(tiendanubePage({
+      variants: [{ option0: 'Recto', option1: 'Negro' }],
+      groups: [
+        { id: 0, labels: ['Corte'], values: ['Recto'] },
+        { id: 1, cls: 'no-colors', labels: ['Color del marco'], values: ['Negro'] },
+      ],
+    }), url);
+    expect(v.variantRoles).toEqual({ 'Color del marco': 'color' });
+    expect(v.colors).toEqual(['Negro']);
+    expect(v.variants?.[0]?.options).toEqual({ Corte: 'Recto', 'Color del marco': 'Negro' });
   });
 
   it('caps variants at 100 and says so', () => {

@@ -27,7 +27,9 @@ export const tiendanubeExtractor: StorefrontExtractor = {
     let score = 0;
     if ($('meta[property="og:type"]').attr('content') === 'tiendanube:product') score += 3;
     if (/LS\.variants\s*=/.test(html)) score += 3;
-    if (/mitiendanube\.com/i.test(html)) score += 1;
+    // The CDN alone is not enough: any page linking to mitiendanube.com would win and switch off
+    // the generic heuristics. It only adds confidence on top of a real signal.
+    if (score > 0 && /mitiendanube\.com/i.test(html)) score += 1;
     return score;
   },
 
@@ -84,9 +86,17 @@ export const tiendanubeExtractor: StorefrontExtractor = {
   },
 };
 
+// Tiendanube property names are free text («Gama», «Corte», «Estampa»), so the role comes from the
+// spec's own lexicon, matched per word — not from the shared COLOR_GROUP_RE / SIZE_GROUP_RE, whose
+// substrings (`cor`, `gama`) would turn product lines and cuts into colours. Colour = whole word
+// (+ plural); size = word prefix (`tama` → «Tamaño»).
+const COLOR_WORD_RE = /^colou?r(?:es|s)?$/i;
+const SIZE_WORD_RE = /^(?:talle|talla|size|tama)/i;
+
 function roleOf(name: string): VariantRole | undefined {
-  if (/colou?r/i.test(name)) return 'color';
-  if (/talle|talla|size|tama/i.test(name)) return 'size';
+  const words = name.split(/[^\p{L}]+/u).filter(Boolean);
+  if (words.some((w) => COLOR_WORD_RE.test(w))) return 'color';
+  if (words.some((w) => SIZE_WORD_RE.test(w))) return 'size';
   return undefined;
 }
 
