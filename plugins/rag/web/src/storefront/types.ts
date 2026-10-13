@@ -14,6 +14,8 @@ export interface StorefrontVariants {
   variants?: ProductVariant[];
   /** Role of each `variants[].options` key that has one. */
   variantRoles?: Record<string, VariantRole>;
+  /** More variants than the cap: `variants` is cut, so it cannot say a size is missing. */
+  variantsTruncated?: true;
 }
 
 export type VariantRole = 'color' | 'size';

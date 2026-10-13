@@ -22,6 +22,8 @@ export interface VariantMetadata {
   variants?: ProductVariant[];
   /** Role of each `variants[].options` key that has one. */
   variantRoles?: Record<string, VariantRole>;
+  /** `variants` was cut at the cap. */
+  variantsTruncated?: true;
 }
 
 /**
@@ -74,6 +76,7 @@ export function extractVariants(html: string, pageUrl?: string): VariantMetadata
   if (dom.variants && dom.variants.length > 0) {
     result.variants = dom.variants;
     result.variantRoles = dom.variantRoles ?? {};
+    if (dom.variantsTruncated) result.variantsTruncated = true;
   }
   // 'generic' when the structured/heuristic baseline produced something but no platform matched.
   if (platformName) result.platform = platformName;

@@ -179,3 +179,107 @@ describe('Tiendanube adapter', () => {
     })));
   });
 });
+
+describe('Tiendanube adapter — edge cases', () => {
+  const url = 'https://tienda.example.com/productos/demo/';
+  const sizeGroup = (values: string[]) => [{ id: 0, labels: ['Talle'], values }];
+
+  it('drops hidden variants, counts unmanaged stock as available, and gives contact variants no price', () => {
+    const v = extractVariants(tiendanubePage({
+      variants: [
+        { option0: 'S', is_visible: false },
+        { option0: 'M', stock: null, available: true },
+        { option0: 'L', contact: true, price_number: null },
+        { option0: 'XL' },
+      ],
+      groups: sizeGroup(['S', 'M', 'L', 'XL']),
+    }), url);
+    expect(v.sizes).toEqual(['M', 'L', 'XL']);
+    expect(v.variants).toEqual([
+      { options: { Talle: 'M' }, available: true },
+      { options: { Talle: 'L' }, available: true, contact: true },
+      { options: { Talle: 'XL' }, available: true },
+    ]);
+  });
+
+  it('stores a price per variant only when prices differ, using price_number even on promotion', () => {
+    const differ = extractVariants(tiendanubePage({
+      variants: [
+        { option0: '36', price_number: 49990, compare_at_price_number: 52990, has_promotional_price: true, promotional_price_number: null },
+        { option0: '38', price_number: 45990 },
+      ],
+      groups: sizeGroup(['36', '38']),
+    }), url);
+    expect(differ.variants?.map((x) => x.price)).toEqual([49990, 45990]);
+
+    const same = extractVariants(tiendanubePage({
+      variants: [{ option0: '36', price_number: 49990 }, { option0: '38', price_number: 49990 }],
+      groups: sizeGroup(['36', '38']),
+    }), url);
+    expect(same.variants?.some((x) => 'price' in x)).toBe(false);
+  });
+
+  it('keeps an option without a role under its label, out of colors and sizes', () => {
+    const v = extractVariants(tiendanubePage({
+      variants: [{ option0: 'M', option1: 'Rojo', option2: '2 metros' }],
+      groups: [
+        { id: 0, labels: ['Talle'], values: ['M'] },
+        { id: 1, cls: 'js-color-variants-container', labels: ['Color'], values: ['Rojo'] },
+        { id: 2, cls: 'no-colors', labels: ['Medida'], values: ['2 metros'] },
+      ],
+    }), url);
+    expect(v.variants?.[0].options).toEqual({ Talle: 'M', Color: 'Rojo', Medida: '2 metros' });
+    expect(v.variantRoles).toEqual({ Talle: 'size', Color: 'color' });
+    expect(v.sizes).toEqual(['M']);
+    expect(v.colors).toEqual(['Rojo']);
+  });
+
+  it('caps variants at 100 and says so', () => {
+    const many = (n: number) => tiendanubePage({
+      variants: Array.from({ length: n }, (_, i) => ({ option0: `T${i + 1}` })),
+      groups: sizeGroup([]),
+    });
+    const cut = extractVariants(many(101), url);
+    expect(cut.variants).toHaveLength(100);
+    expect(cut.variantsTruncated).toBe(true);
+    const whole = extractVariants(many(100), url);
+    expect(whole.variants).toHaveLength(100);
+    expect(whole).not.toHaveProperty('variantsTruncated');
+  });
+
+  it("falls back to the main container's data-variants when LS.variants is missing or broken", () => {
+    const page = {
+      mainVariants: [{ option0: 'S' }, { option0: 'M', available: false }],
+      groups: sizeGroup(['S', 'M']),
+      quickshops: [{
+        variants: [{ option0: 'XXL', option1: 'Negro' }],
+        groups: [
+          { id: 0, labels: ['Talle'], values: ['XXL'] },
+          { id: 1, cls: 'js-color-variants-container', labels: ['Color'], values: ['Negro'] },
+        ],
+      }],
+    };
+    for (const variants of [null, '[{"option0":"S",'] as const) {
+      const v = extractVariants(tiendanubePage({ ...page, variants }), url);
+      expect(v.sizes).toEqual(['S', 'M']);
+      expect(v.colors).toEqual([]);
+      expect(v.variants).toEqual([
+        { options: { Talle: 'S' }, available: true },
+        { options: { Talle: 'M' }, available: false },
+      ]);
+    }
+  });
+
+  it('takes the colour role from the group class when the group has no label', () => {
+    const v = extractVariants(tiendanubePage({
+      variants: [{ option0: 'Rojo', option1: 'Lisa' }],
+      groups: [
+        { id: 0, cls: 'js-color-variants-container', labels: [], values: ['Rojo'] },
+        { id: 1, cls: 'no-colors', labels: [], values: ['Lisa'] },
+      ],
+    }), url);
+    expect(v.colors).toEqual(['Rojo']);
+    expect(v.sizes).toEqual([]);
+    expect(v.variantRoles).toEqual({ Color: 'color' });
+  });
+});

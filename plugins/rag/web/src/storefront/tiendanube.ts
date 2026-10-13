@@ -1,6 +1,9 @@
 import type { ProductVariant, StorefrontExtractor, StorefrontVariants, VariantRole } from './types';
 import type { CheerioRoot } from './shared';
 
+/** Enough for a product's real combinations; Tiendanube allows up to 999. Past it, `variantsTruncated`. */
+export const MAX_VARIANTS = 100;
+
 /**
  * Tiendanube (Nuvemshop) adapter.
  *
@@ -29,8 +32,11 @@ export const tiendanubeExtractor: StorefrontExtractor = {
   },
 
   extract(html: string, $: CheerioRoot): StorefrontVariants {
-    const raw = readLsVariants(html) ?? [];
     const main = $('.js-product-container').not('.js-quickshop-container').first();
+    // `data-variants` of the main container only: the quick-shops carry other products' variants.
+    const raw = parseVariants(html.match(/LS\.variants\s*=\s*(\[[\s\S]*?\]);/)?.[1])
+      ?? parseVariants(main.attr('data-variants'))
+      ?? [];
 
     const names = new Map<number, string>();
     main.find('.js-product-variants-group').each((_, el) => {
@@ -39,14 +45,19 @@ export const tiendanubeExtractor: StorefrontExtractor = {
       const label = group.find('label').toArray()
         .map((l) => $(l).text().split(':')[0].trim())
         .find(Boolean);
-      if (Number.isInteger(id) && label) names.set(id, label);
+      // No label: the theme's colour-swatch class still says it is the colour.
+      const name = label || (group.hasClass('js-color-variants-container') ? 'Color' : undefined);
+      if (Number.isInteger(id) && name) names.set(id, name);
     });
 
     const roles: Record<string, VariantRole> = {};
     const colors: string[] = [];
     const sizes: string[] = [];
     const variants: ProductVariant[] = [];
-    for (const v of raw) {
+    const visible = raw.filter((v) => v.is_visible !== false);
+    const priced = visible.filter((v) => v.contact !== true && typeof v.price_number === 'number');
+    const pricesDiffer = new Set(priced.map((v) => v.price_number)).size > 1;
+    for (const v of visible) {
       const options: Record<string, string> = {};
       for (const i of [0, 1, 2]) {
         const value = clean(v[`option${i}`]);
@@ -59,11 +70,17 @@ export const tiendanubeExtractor: StorefrontExtractor = {
         (role === 'color' ? colors : sizes).push(value);
       }
       if (Object.keys(options).length === 0) continue;
-      variants.push({ options, available: v.available === true });
+      // `price_number` is the price charged, also on promotion (compare_at is the struck-out one).
+      const variant: ProductVariant = { options, available: v.available === true };
+      if (v.contact === true) variant.contact = true;
+      else if (pricesDiffer && typeof v.price_number === 'number') variant.price = v.price_number;
+      variants.push(variant);
     }
 
     if (variants.length === 0) return { colors: [], sizes: [] };
-    return { colors, sizes, variants, variantRoles: roles };
+    const result: StorefrontVariants = { colors, sizes, variants: variants.slice(0, MAX_VARIANTS), variantRoles: roles };
+    if (variants.length > MAX_VARIANTS) result.variantsTruncated = true;
+    return result;
   },
 };
 
@@ -78,11 +95,10 @@ function clean(value: unknown): string {
   return typeof value === 'string' ? value.trim().replace(/\.$/, '').trim() : '';
 }
 
-function readLsVariants(html: string): Record<string, unknown>[] | undefined {
-  const match = html.match(/LS\.variants\s*=\s*(\[[\s\S]*?\]);/);
-  if (!match) return undefined;
+function parseVariants(json: string | undefined): Record<string, unknown>[] | undefined {
+  if (!json) return undefined;
   try {
-    const parsed = JSON.parse(match[1]);
+    const parsed = JSON.parse(json);
     return Array.isArray(parsed) ? parsed : undefined;
   } catch {
     return undefined;
