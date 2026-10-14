@@ -1,13 +1,14 @@
 import * as cheerio from 'cheerio';
-import type { StorefrontExtractor, StorefrontVariants } from './types';
+import type { ProductVariant, StorefrontExtractor, StorefrontVariants, VariantRole } from './types';
 import { collect } from './shared';
 import { extractStructured } from './structured';
 import { extractHeuristics } from './heuristics';
 import { prestashopExtractor } from './prestashop';
 import { shopifyExtractor } from './shopify';
+import { tiendanubeExtractor } from './tiendanube';
 import { extractProductImages, type ProductImage } from '../productImages';
 
-export type { StorefrontExtractor, StorefrontVariants } from './types';
+export type { ProductVariant, StorefrontExtractor, StorefrontVariants, VariantRole } from './types';
 
 /** Result of variant extraction for one product page. */
 export interface VariantMetadata {
@@ -15,8 +16,14 @@ export interface VariantMetadata {
   sizes: string[];
   /** The page's own product photos, each with its colour when the page declares it. */
   images?: ProductImage[];
-  /** Which extractor produced the structured result ('prestashop' | 'shopify' | 'generic'). */
+  /** Which extractor produced the structured result ('prestashop' | 'shopify' | 'tiendanube' | 'generic'). */
   platform?: string;
+  /** Every visible combination with its availability, when the platform declares it. */
+  variants?: ProductVariant[];
+  /** Role of each `variants[].options` key that has one. */
+  variantRoles?: Record<string, VariantRole>;
+  /** `variants` was cut at the cap. */
+  variantsTruncated?: true;
 }
 
 /**
@@ -24,7 +31,7 @@ export interface VariantMetadata {
  * `extractStructured`) is NOT in this list — it always runs as the universal baseline, and the
  * generic DOM heuristic runs whole-page only when no adapter matches.
  */
-const ADAPTERS: StorefrontExtractor[] = [prestashopExtractor, shopifyExtractor];
+const ADAPTERS: StorefrontExtractor[] = [prestashopExtractor, shopifyExtractor, tiendanubeExtractor];
 
 /**
  * Auto-detected storefront variant extraction.
@@ -66,6 +73,11 @@ export function extractVariants(html: string, pageUrl?: string): VariantMetadata
 
   const result: VariantMetadata = { colors, sizes };
   if (images.length > 0) result.images = images;
+  if (dom.variants && dom.variants.length > 0) {
+    result.variants = dom.variants;
+    result.variantRoles = dom.variantRoles ?? {};
+    if (dom.variantsTruncated) result.variantsTruncated = true;
+  }
   // 'generic' when the structured/heuristic baseline produced something but no platform matched.
   if (platformName) result.platform = platformName;
   else if (colors.length > 0 || sizes.length > 0) result.platform = 'generic';

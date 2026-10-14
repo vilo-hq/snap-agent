@@ -10,7 +10,7 @@ export type { HtmlPageExtractOptions, HtmlPageExtractResult } from './htmlPageEx
 export { extractProductMetadata, parsePrice, normalizeCurrency, normalizeAvailability } from './productMetadata';
 export type { ProductMetadata } from './productMetadata';
 export { extractVariants } from './storefront';
-export type { VariantMetadata, StorefrontExtractor, StorefrontVariants } from './storefront';
+export type { VariantMetadata, StorefrontExtractor, StorefrontVariants, ProductVariant, VariantRole } from './storefront';
 export { extractProductImages, MAX_PRODUCT_IMAGES } from './productImages';
 export { readBreadcrumbs } from './breadcrumbs';
 export type { BreadcrumbItem } from './breadcrumbs';

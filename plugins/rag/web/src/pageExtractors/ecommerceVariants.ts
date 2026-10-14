@@ -24,6 +24,11 @@ export const ecommerceVariantsExtractor: PageAttributeExtractor = {
     if (v.colors.length > 0) metadata.colors = v.colors;
     if (v.sizes.length > 0) metadata.sizes = v.sizes;
     if (v.images && v.images.length > 0) metadata.images = v.images;
+    if (v.variants) {
+      metadata.variants = v.variants;
+      metadata.variantRoles = v.variantRoles;
+      if (v.variantsTruncated) metadata.variantsTruncated = true;
+    }
     if (v.platform) metadata.storefrontPlatform = v.platform;
     return { metadata, contentLines: line ? [line] : [] };
   },

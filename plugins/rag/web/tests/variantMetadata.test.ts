@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { extractVariants } from '../src/variantMetadata';
 import { extractPageFromHtml } from '../src/htmlPageExtract';
+import { tiendanubePage, singleGroupTheme, type TnVariant } from './fixtures/tiendanube';
 
 describe('extractVariants', () => {
   it('reads colors/sizes from schema.org JSON-LD (Product + additionalProperty)', () => {
@@ -75,5 +76,45 @@ describe('extractPageFromHtml — variant enrichment', () => {
     const r = extractPageFromHtml('https://shop.example.com/p', html, { extractVariantMetadata: false });
     expect(r.content).not.toMatch(/available colors/i);
     expect(r.metadata.colors).toBeUndefined();
+  });
+});
+
+describe('extractPageFromHtml — Tiendanube variants', () => {
+  const url = 'https://tienda.example.com/productos/demo/';
+
+  it('stores variants and roles in metadata, and the cut when there are more than 100', () => {
+    const r = extractPageFromHtml(url, tiendanubePage(singleGroupTheme), { defaultType: 'product' });
+    expect(r.metadata.variants).toEqual([
+      { options: { Talle: 'S' }, available: true },
+      { options: { Talle: 'M' }, available: false },
+    ]);
+    expect(r.metadata.variantRoles).toEqual({ Talle: 'size' });
+    expect(r.metadata).not.toHaveProperty('variantsTruncated');
+
+    const many = tiendanubePage({
+      variants: Array.from({ length: 101 }, (_, i) => ({ option0: `T${i + 1}` })),
+      groups: [{ id: 0, labels: ['Talle'], values: [] }],
+    });
+    const cut = extractPageFromHtml(url, many, { defaultType: 'product' });
+    expect(cut.metadata.variants).toHaveLength(100);
+    expect(cut.metadata.variantsTruncated).toBe(true);
+  });
+
+  it('stores no variants with extractVariantMetadata:false', () => {
+    const r = extractPageFromHtml(url, tiendanubePage(singleGroupTheme), { extractVariantMetadata: false });
+    expect(r.metadata).not.toHaveProperty('variants');
+    expect(r.metadata).not.toHaveProperty('variantRoles');
+  });
+
+  it('indexes the same content when only availability changes', () => {
+    const restocked = {
+      ...singleGroupTheme,
+      variants: (singleGroupTheme.variants as TnVariant[]).map((v) => ({ ...v, available: true, stock: 3 })),
+    };
+    const before = extractPageFromHtml(url, tiendanubePage(singleGroupTheme), { defaultType: 'product' });
+    const after = extractPageFromHtml(url, tiendanubePage(restocked), { defaultType: 'product' });
+    expect(after.metadata.variants).not.toEqual(before.metadata.variants);
+    expect(after.content).toBe(before.content);
+    expect(before.content).toMatch(/available sizes: S, M\./);
   });
 });

@@ -10,6 +10,25 @@ export interface StorefrontVariants {
    * its variant's colour. Absent for platforms that resolve variant images via AJAX (PrestaShop).
    */
   images?: ProductImage[];
+  /** Every visible combination with its availability (platforms that declare it: Tiendanube). */
+  variants?: ProductVariant[];
+  /** Role of each `variants[].options` key that has one. */
+  variantRoles?: Record<string, VariantRole>;
+  /** More variants than the cap: `variants` is cut, so it cannot say a size is missing. */
+  variantsTruncated?: true;
+}
+
+export type VariantRole = 'color' | 'size';
+
+/** One purchasable combination of the product's options. */
+export interface ProductVariant {
+  /** Key = the group's label as the store declares it («Talle», «Color», «Medida»). */
+  options: Record<string, string>;
+  available: boolean;
+  /** Only when the price differs between variants. */
+  price?: number;
+  /** «Consultar precio»: no price, not bought online. */
+  contact?: true;
 }
 
 /**

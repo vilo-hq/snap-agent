@@ -955,6 +955,11 @@ export class WebRAGPlugin implements RAGPlugin {
           ...(doc.metadata.currency ? { currency: doc.metadata.currency } : {}),
           ...(doc.metadata.availability ? { availability: doc.metadata.availability } : {}),
           ...(doc.metadata.colors ? { colors: doc.metadata.colors } : {}),
+          ...(doc.metadata.sizes ? { sizes: doc.metadata.sizes } : {}),
+          // Availability per combination (Tiendanube): the host filters by size on it.
+          ...(doc.metadata.variants ? { variants: doc.metadata.variants } : {}),
+          ...(doc.metadata.variantRoles ? { variantRoles: doc.metadata.variantRoles } : {}),
+          ...(doc.metadata.variantsTruncated ? { variantsTruncated: doc.metadata.variantsTruncated } : {}),
           ...(doc.metadata.images ? { images: doc.metadata.images } : {}),
           // Campos descubiertos por la herramienta de taxonomia del host: datos por entidad
           // (Client, Size, Location) que describen la ficha sin particionar el corpus. Viajan
@@ -990,7 +995,9 @@ export class WebRAGPlugin implements RAGPlugin {
       if (meta.url) sections.push(`**URL:** ${meta.url}`);
 
       // Add any other metadata fields (excluding internal ones)
-      const skipFields = ['type', 'title', 'url', 'sourceUrl', 'fetchedAt'];
+      // `variants` is an array of objects: `formatFieldValue` would print `[object Object]`. The host
+      // gives the model the available sizes instead.
+      const skipFields = ['type', 'title', 'url', 'sourceUrl', 'fetchedAt', 'variants', 'variantRoles'];
       const extraMeta = Object.entries(meta)
         .filter(([key]) => !skipFields.includes(key))
         .map(([key, value]) => `**${this.formatFieldName(key)}:** ${this.formatFieldValue(value)}`);
