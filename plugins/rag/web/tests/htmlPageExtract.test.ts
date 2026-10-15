@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { extractPageFromHtml, sourceScopedDocumentId, trustedCanonicalUrl } from '../src/htmlPageExtract';
+import { declaresOwnContent, extractPageFromHtml, sourceScopedDocumentId, trustedCanonicalUrl } from '../src/htmlPageExtract';
 import { stripTrackingParams } from '../src/trackingParams';
 
 const BODY = '<p>' + 'x'.repeat(60) + '</p>';
@@ -183,5 +183,68 @@ describe('observations.pageType', () => {
   it('says nothing about a page that declares nothing', () => {
     const extracted = extractPageFromHtml('https://shop.test/about/', `<html><head><title>About</title></head><body>${BODY}</body></html>`);
     expect((extracted.metadata.observations as { pageType?: string }).pageType).toBeUndefined();
+  });
+});
+
+// A storefront theme with no content container (Tiendanube, as on Helena, 2026-10-15): the body
+// fallback used to keep the pop-ups, the sort dropdown and the filter panel as the page's text.
+describe('interface chrome', () => {
+  const chrome = `
+    <div class="js-modal modal modal-bottom" id="related-products-notification"><div class="modal-header">¡Agregado al carrito!</div><a href="/cart">Ver carrito</a></div>
+    <div class="js-modal modal" id="js-cross-selling-modal"><div class="modal-header">¡Descuento exclusivo!</div></div>
+    <dialog open>Medios de pago: 15% OFF con transferencia</dialog>
+    <div role="dialog">Suscribite y obtené un cupón</div>
+    <div aria-modal="true">Elegí tu talle</div>
+    <select class="js-sort-by"><option>Precio: menor a mayor</option><option>Más vendidos</option></select>
+    <div class="filters-sidebar"><h5>Filtrar por</h5>Color Negro (2) Blanco (5) Talle S (82)</div>`;
+  const product = '<h1>Pantalón Madrid Verde Militar</h1><p>Pantalón corte palazzo, amplio de piernas, con pinzas, cierre y botón. Composición: tencel.</p>';
+
+  it('drops pop-ups, a sort dropdown and a filter panel when the body is the content', () => {
+    const result = extractPageFromHtml('https://shop.test/productos/pantalon-madrid/', `<html><body>${chrome}${product}</body></html>`);
+    expect(result.content).toContain('Pantalón corte palazzo');
+    for (const text of ['Agregado al carrito', 'Ver carrito', 'Descuento exclusivo', 'Medios de pago', 'cupón', 'Elegí tu talle', 'Precio: menor a mayor', 'Más vendidos', 'Filtrar por', 'Talle S (82)']) {
+      expect(result.content).not.toContain(text);
+    }
+  });
+
+  it('keeps prose that merely mentions filters or a modal', () => {
+    const prose = '<main><p>Our filters page explains how the modal dialog of the old site worked, in plain prose long enough.</p></main>';
+    const result = extractPageFromHtml('https://example.com/about', `<html><body>${prose}</body></html>`);
+    expect(result.content).toContain('Our filters page explains how the modal dialog');
+  });
+});
+
+// Once the interface is gone, a listing is little more than its heading and a gift card is a title
+// and a price. Pages that declare what they are stay indexable; the rest keep the general minimum.
+describe('declared pages with short text', () => {
+  const ld = (json: unknown) => `<script type="application/ld+json">${JSON.stringify(json)}</script>`;
+  const listed = [1, 2].map((i) => ld({ '@type': 'Product', name: `P${i}`, offers: { '@type': 'Offer', url: `https://shop.test/p/${i}/`, price: '10' } })).join('');
+
+  it('indexes a listing whose own text is only its heading', () => {
+    const result = extractPageFromHtml('https://shop.test/nueva-coleccion-la-muse/', `<html><head><title>La Muse</title></head><body>${listed}<div class="js-modal modal">¡Agregado al carrito!</div><h1>NUEVA COLECCIÓN - La Muse</h1></body></html>`);
+    // Its own text is the heading; the products it declares follow (see listedProducts.test.ts).
+    expect(result.content.startsWith('NUEVA COLECCIÓN - La Muse')).toBe(true);
+    expect(result.content).not.toContain('Agregado al carrito');
+    expect(result.indexable).toBe(true);
+  });
+
+  it('indexes a product with a price and a short description', () => {
+    const html = `<html><head><meta property="product:price:amount" content="50000" /><meta property="product:price:currency" content="ARS" /></head><body><h1>Gift Card</h1><p>Elegí el monto.</p></body></html>`;
+    const result = extractPageFromHtml('https://shop.test/productos/gift-card/', html);
+    expect(result.metadata.price).toBe(50000);
+    expect(result.indexable).toBe(true);
+  });
+
+  it('keeps the general minimum for a short page that declares nothing', () => {
+    const result = extractPageFromHtml('https://shop.test/hola/', '<html><body><h1>Hola</h1><p>Bienvenida a la tienda.</p></body></html>');
+    expect(result.indexable).toBe(false);
+  });
+
+  it('declaresOwnContent: a price or a listing, nothing else', () => {
+    expect(declaresOwnContent({ price: 10 })).toBe(true);
+    expect(declaresOwnContent({ observations: { pageType: 'collection' } })).toBe(true);
+    expect(declaresOwnContent({ observations: { pageType: 'detail' } })).toBe(false);
+    expect(declaresOwnContent({ price: '10' })).toBe(false);
+    expect(declaresOwnContent(undefined)).toBe(false);
   });
 });

@@ -28,7 +28,33 @@ const DEFAULT_REMOVE_SELECTORS = [
   '[class*="carousel" i]', '[class*="slider" i]',
   '[class*="navbar" i]', '[class*="mega-menu" i]',
   '[class*="site-footer" i]', '[class*="page-footer" i]', '[id*="footer" i]',
+  // Interface that only appears on demand: pop-ups and dialogs («¡Agregado al carrito!», «¡Descuento
+  // exclusivo!», the payment-methods and filter panels, a mobile menu), a sort dropdown's options and
+  // a listing's filter panel («Filtrar por Color Negro (2) Blanco (5)…»). Never the page's own content.
+  // Measured on Helena (Tiendanube, 2026-10-15): with no content container, the body fallback kept all
+  // of it — 376 of 1585 chunks, and a listing whose whole text was this. Checked on 89 live pages of
+  // every site in production: SmithGroup, Casalab and SuccessFactors lose nothing; Christen loses only
+  // its search filters and dropdowns.
+  'dialog', '[role="dialog"]', '[role="alertdialog"]', '[aria-modal="true"]', '.modal',
+  'select',
+  '[class*="filters" i]', '[id*="filters" i]',
 ];
+
+/**
+ * Least text a page that DECLARES what it is (its own product with a price, or a listing) needs to
+ * be indexed. The general minimums (`minExtractedContentLength`, the crawler's `minContentLength`)
+ * exist to catch empty shells; a page whose markup says what it is is real even when its own text is
+ * short — once the interface is stripped, a listing is little more than its heading and a gift card
+ * is a title and a price (157 characters on Helena).
+ */
+export const DECLARED_PAGE_MIN_CONTENT = 10;
+
+/** Does the page declare its own content: a product with a price, or a listing? */
+export function declaresOwnContent(metadata: Record<string, unknown> | undefined): boolean {
+  if (!metadata) return false;
+  const pageType = (metadata.observations as { pageType?: unknown } | undefined)?.pageType;
+  return typeof metadata.price === 'number' || pageType === 'collection';
+}
 
 /** Link-dense blocks (nav remnants, footers, "related products" grids) are boilerplate, not prose. */
 const LINK_DENSITY_THRESHOLD = 0.5;
@@ -65,7 +91,10 @@ export interface HtmlPageExtractResult {
   canonicalUrl: string | null;
   metadata: Record<string, unknown>;
   content: string;
-  /** True when content meets minExtractedContentLength (default 50). */
+  /**
+   * True when content meets minExtractedContentLength (default 50), or DECLARED_PAGE_MIN_CONTENT for
+   * a page that declares its own content (see `declaresOwnContent`).
+   */
   indexable: boolean;
   contentPreview: string;
 }
@@ -146,8 +175,6 @@ export function extractPageFromHtml(
   const extraLines = [...extracted.contentLines].filter(Boolean);
   const content =
     extraLines.length > 0 ? `${baseContent}\n\n${extraLines.join('\n\n')}` : baseContent;
-  const minChars = options.minExtractedContentLength ?? 50;
-  const indexable = Boolean(baseContent && baseContent.length >= minChars);
 
   const image =
     $('meta[property="og:image"]').attr('content') ||
@@ -223,6 +250,12 @@ export function extractPageFromHtml(
     ...(currency ? { currency } : {}),
     ...options.metadata,
   };
+
+  const minChars = options.minExtractedContentLength ?? 50;
+  const indexable = Boolean(baseContent) && (
+    baseContent.length >= minChars ||
+    (declaresOwnContent(metadata) && baseContent.length >= DECLARED_PAGE_MIN_CONTENT)
+  );
 
   const previewLen = 400;
   const contentPreview =

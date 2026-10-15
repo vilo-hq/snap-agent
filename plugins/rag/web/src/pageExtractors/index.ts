@@ -6,8 +6,10 @@
  */
 import { registerPageExtractor } from './registry';
 import { ecommerceVariantsExtractor } from './ecommerceVariants';
+import { listingProductsExtractor } from './listingProducts';
 
 registerPageExtractor(ecommerceVariantsExtractor);
+registerPageExtractor(listingProductsExtractor);
 
 export type {
   PageAttributeExtractor,
@@ -23,3 +25,4 @@ export {
   type RunPageExtractorsResult,
 } from './registry';
 export { ecommerceVariantsExtractor, formatVariantLine } from './ecommerceVariants';
+export { listingProductsExtractor, formatListedProducts } from './listingProducts';

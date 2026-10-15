@@ -36,7 +36,7 @@ const WEB_PAGE_TYPES = new Set([
   'webpage', 'aboutpage', 'contactpage', 'faqpage', 'checkoutpage', 'medicalwebpage', 'realestatelisting',
   ...LISTING_PAGE_TYPES, ...DETAIL_PAGE_TYPES,
 ]);
-const LIST_TYPES = new Set(['itemlist', 'offercatalog']);
+export const LIST_TYPES = new Set(['itemlist', 'offercatalog']);
 const OG_DETAIL_TYPE = /(^|[:.])(product|profile|book|place)(\.|$)/;
 
 export function schemaTypesOf(node: Record<string, unknown>): string[] {
@@ -49,12 +49,12 @@ export function schemaTypesOf(node: Record<string, unknown>): string[] {
 }
 
 /** `ProductGroup` is a `Product` in schema.org: the page of a product sold in several variants. */
-const isProduct = (node: Record<string, unknown>) => schemaTypesOf(node).some((t) => t === 'product' || t === 'productgroup');
+export const isProduct = (node: Record<string, unknown>) => schemaTypesOf(node).some((t) => t === 'product' || t === 'productgroup');
 
-interface PlacedNode { node: Record<string, unknown>; inHead: boolean }
+export interface PlacedNode { node: Record<string, unknown>; inHead: boolean }
 
 /** Top-level and `@graph` nodes of every JSON-LD block, with where the block sits. */
-function topLevelNodes($: cheerio.CheerioAPI): PlacedNode[] {
+export function topLevelNodes($: cheerio.CheerioAPI): PlacedNode[] {
   const out: PlacedNode[] = [];
   $('script[type="application/ld+json"]').each((_, element) => {
     const raw = $(element).html()?.trim();
@@ -84,7 +84,7 @@ function pageKey(url: string): string | undefined {
 }
 
 /** URLs a node points at to say which page it belongs to: its own, its page's, its offer's. */
-function nodeUrls(node: Record<string, unknown>, base: string): string[] {
+export function nodeUrls(node: Record<string, unknown>, base: string): string[] {
   const refs: unknown[] = [node.url, node['@id']];
   const page = node.mainEntityOfPage;
   refs.push(...(Array.isArray(page) ? page : [page]).map((p) => (p && typeof p === 'object' ? (p as Record<string, unknown>)['@id'] ?? (p as Record<string, unknown>).url : p)));

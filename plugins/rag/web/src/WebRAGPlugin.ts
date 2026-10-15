@@ -30,6 +30,7 @@ import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 import {
   bodyTextLengthHint as htmlBodyTextLengthHint,
+  declaresOwnContent,
   extractPageFromHtml,
   sourceScopedDocumentId,
   urlToDocumentId,
@@ -3352,7 +3353,11 @@ export class WebRAGPlugin implements RAGPlugin {
       const staticHint = !doc ? this.bodyTextLengthHint(html, config) : undefined;
       const staticLinks = this.extractLinksIfEnabled(url, html, config);
 
-      if (doc && doc.content.length >= ctx.minContentLength) {
+      // A short page that declares what it is (its own product, or a listing) is real content, not a
+      // shell waiting for JavaScript — unless the HTML itself looks like one.
+      const declaredShortPage = Boolean(doc) && declaresOwnContent(doc!.metadata as Record<string, unknown>)
+        && !this.looksLikeDynamicShell(html);
+      if (doc && (doc.content.length >= ctx.minContentLength || declaredShortPage)) {
         return { doc, diag: { modeUsed: 'static_ok' }, links: staticLinks };
       }
 

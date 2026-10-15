@@ -1608,6 +1608,26 @@ describe('WebRAGPlugin', () => {
       expect(result.urlsCrawled).toBe(2);
     });
 
+    it('indexes a short page that declares itself a listing, and not one that declares nothing', async () => {
+      const ld = (json: unknown) => `<script type="application/ld+json">${JSON.stringify(json)}</script>`;
+      const listed = [1, 2].map((i) => ld({ '@type': 'Product', name: `P${i}`, offers: { '@type': 'Offer', url: `https://shop.test/p/${i}/`, price: '10' } })).join('');
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          headers: { get: () => 'text/html' },
+          text: async () => `<html><body>${listed}<h1>NUEVA COLECCIÓN - La Muse</h1></body></html>`,
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          headers: { get: () => 'text/html' },
+          text: async () => `<html><body><h1>NUEVA COLECCIÓN - La Muse</h1></body></html>`,
+        });
+
+      const result = await plugin.ingestFromUrls(['https://shop.test/nueva-coleccion-la-muse/', 'https://shop.test/sin-declarar/'], { concurrency: 1 });
+
+      expect(result.urlsCrawled).toBe(1);
+    });
+
     it('should use custom content selector', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
